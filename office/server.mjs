@@ -1372,9 +1372,9 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(403, { "Content-Type": "application/json" }).end('{"error":"private dept"}');
       return;
     }
-    // 대화방 정리는 이사 이상 (본부장은 새 세션을 만들 수만 있다)
-    if (rankOf(req) < RANKS.이사) {
-      res.writeHead(403, { "Content-Type": "application/json" }).end('{"error":"director only"}');
+    // 대화방 정리는 사장만 (이사·본부장은 새 세션을 만들 수만 있다)
+    if (!isBoss(req)) {
+      res.writeHead(403, { "Content-Type": "application/json" }).end('{"error":"boss only"}');
       return;
     }
     const s = dept?.sessions[sessionId];
@@ -1451,11 +1451,11 @@ const server = http.createServer(async (req, res) => {
       memos.push({ id: newId(), name, rank: me.rank, text, at: new Date().toISOString() });
       registerPrMember(dept, name);
     } else {
-      // 남의 메모를 떼는 건 이사 이상. 본부장은 자기가 붙인 것만 뗀다.
+      // 남의 메모를 떼는 건 사장만. 이사·본부장은 자기가 붙인 것만 뗀다.
       const target = memos.find((m) => m.id === memoId);
       const mine = target && target.name === me.name;
-      if (!mine && (RANKS[me.rank] || 0) < RANKS.이사) {
-        res.writeHead(403, { "Content-Type": "application/json" }).end('{"error":"director only"}');
+      if (!mine && !isBoss(req)) {
+        res.writeHead(403, { "Content-Type": "application/json" }).end('{"error":"boss only"}');
         return;
       }
       memos = memos.filter((m) => m.id !== memoId);

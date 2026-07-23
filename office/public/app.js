@@ -412,14 +412,14 @@ function renderBoard(memos) {
     who.appendChild(whoName);
     who.appendChild(whoTime);
     meta.appendChild(who);
-    // 남의 메모는 이사 이상만 뗀다. 본부장은 자기가 붙인 것만 — 서버도 같은 기준으로 막는다
+    // 남의 메모는 사장만 뗀다. 이사·본부장은 자기가 붙인 것만 — 서버도 같은 기준으로 막는다
     const mine = m.name && m.name === myName();
-    if (mine || state.level >= 2) {
+    if (mine || state.level >= 3) {
       const del = document.createElement("button");
       del.type = "button";
       del.className = "mDel";
       del.innerHTML = '<span class="material-symbols-outlined">delete</span>';
-      del.title = mine ? "내 메모 떼기" : "메모 떼기 (이사 이상)";
+      del.title = mine ? "내 메모 떼기" : "메모 떼기 (사장 전용)";
       del.addEventListener("click", () => {
         fetch("/board/delete", {
           method: "POST",
@@ -658,8 +658,8 @@ function renderSessionBar() {
   }
   sessionSel.value = d.activeSession;
   sessionSel.classList.toggle("hasUnread", unseen > 0);
-  // 대화방 정리는 이사 이상 — 본부장에게는 버튼을 숨긴다
-  delSessionBtn.hidden = state.level < 2;
+  // 대화방 정리는 사장만 — 이사·본부장에게는 버튼을 숨긴다
+  delSessionBtn.hidden = state.level < 3;
 }
 
 sessionSel.addEventListener("change", () => selectSession(active, sessionSel.value));
