@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TERRA 연구실</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400..700&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- ── 좌측 부서 네비 ───────────────────────────────────────── -->
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="brandMark">T</div>
+      <div>
+        <h1>TERRA 연구실</h1>
+        <p>AI Enterprise Control</p>
+      </div>
+    </div>
+
+    <div id="meCard" hidden>
+      <span class="meRank" id="meRank"></span>
+      <span class="meName" id="meName"></span>
+      <button type="button" id="logoutBtn" title="퇴근 (사원증 지우기)">
+        <span class="material-symbols-outlined">logout</span>
+      </button>
+    </div>
+
+    <nav id="tabs" aria-label="부서 선택"></nav>
+
+    <section id="prBoard" hidden aria-label="팀원별 PR 집계"></section>
+
+    <!-- 메모함: 직원이 남긴 노트 (사장 전용) -->
+    <section id="noteBox" hidden aria-label="메모함">
+      <div class="nbHead">
+        <span class="material-symbols-outlined">sticky_note_2</span>
+        <span class="nbTitle">메모함</span>
+        <button type="button" id="noteAddBtn" title="새 메모 쓰기">
+          <span class="material-symbols-outlined">add</span>
+        </button>
+      </div>
+      <div id="noteList"></div>
+    </section>
+
+    <div class="sideFoot">
+      <span class="material-symbols-outlined">folder_open</span>
+      보관 메모 <b id="noteCount">0</b>건
+    </div>
+  </aside>
+
+  <!-- ── 본문 ────────────────────────────────────────────────── -->
+  <main>
+    <header>
+      <h2 id="deptTitle">비서실</h2>
+      <span class="hDivider"></span>
+      <span id="workState" class="stateChip">○ 대기중</span>
+    </header>
+
+    <div id="content">
+      <div class="cols">
+        <!-- 좌: 사무실 현황 -->
+        <div class="colMain">
+          <section id="office" aria-label="사무실 전경">
+            <svg id="scene" role="img" aria-label="사무실 전경 — 직원들이 자리에서 일하고 있다"></svg>
+            <div id="stage"></div>
+            <div id="bubble" hidden></div>
+          </section>
+
+          <div id="legend" class="staffGrid" aria-label="직원 현황"></div>
+        </div>
+
+        <!-- 우: 사내 메신저 -->
+        <section id="messenger" aria-label="사내 메신저">
+          <div class="mHead">
+            <span class="material-symbols-outlined">forum</span>
+            <span id="mHeadText">사내 메신저</span>
+          </div>
+          <div id="sessionBar">
+            <label for="sessionSel" class="sLabel">세션</label>
+            <select id="sessionSel"></select>
+            <button id="newSessionBtn" type="button" title="새 세션">
+              <span class="material-symbols-outlined">add</span>
+            </button>
+            <button id="delSessionBtn" type="button" title="현재 세션 삭제">
+              <span class="material-symbols-outlined">delete</span>
+            </button>
+          </div>
+          <div id="logs" aria-live="polite"></div>
+          <div id="attachBar" hidden>
+            <span id="attachName"></span>
+            <button type="button" id="attachCancel" title="첨부 취소">✕</button>
+          </div>
+          <form id="sayForm">
+            <label for="sayInput" class="prompt">나&gt;</label>
+            <input id="sayInput" type="text" autocomplete="off"
+                   placeholder="지시 사항을 입력하세요" />
+            <input id="fileInput" type="file" hidden />
+            <button type="button" id="attachBtn" title="파일 첨부 (10MB 이하)">
+              <span class="material-symbols-outlined">attach_file</span>
+            </button>
+            <button type="submit" id="sendBtn" title="전달">
+              <span class="material-symbols-outlined">send</span>
+            </button>
+          </form>
+        </section>
+      </div>
+
+      <!-- PM 봇 알림 (물커톤실 전용) -->
+      <section id="pmBot" hidden aria-label="PM 봇 — 깃허브 활동 알림">
+        <div class="pmHead">
+          <span class="material-symbols-outlined">notifications_active</span>
+          사내 메신저 — PM 봇 알림
+        </div>
+        <div class="pmBar">
+          <span class="sLabel">세션</span>
+          <span class="pmSession">GitHub 연동 현황</span>
+          <span class="pmRepo" id="pmRepo"></span>
+        </div>
+        <div id="pmLog" aria-live="polite"></div>
+      </section>
+
+      <!-- 부서 게시판 -->
+      <section id="teamBoard" aria-label="부서 게시판">
+        <h3>
+          <span class="material-symbols-outlined">push_pin</span>
+          부서 게시판 — 팀 공유 메모
+        </h3>
+        <div id="boardList"></div>
+        <form id="boardForm">
+          <input id="boardInput" type="text" autocomplete="off" maxlength="500"
+                 placeholder="팀원 모두에게 보이는 메모를 남기세요" />
+          <button type="submit">붙이기</button>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <!-- 메모 편집기 (사장 전용) -->
+  <div id="noteModal" hidden>
+    <form id="noteForm">
+      <div class="nmHead">
+        <span class="material-symbols-outlined">sticky_note_2</span>
+        <span id="noteModalHead">메모</span>
+        <button type="button" id="noteCloseBtn" title="닫기">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <label for="noteTitle">제목 <span class="nmHint">직원이 read_note로 찾는 이름입니다</span></label>
+      <input id="noteTitle" type="text" maxlength="80" autocomplete="off" required
+             placeholder="예: 물커톤-대회정보" />
+      <label for="noteText">내용</label>
+      <textarea id="noteText" spellcheck="false" placeholder="메모 내용"></textarea>
+      <div class="nmBtns">
+        <button type="button" id="noteDelBtn">삭제</button>
+        <span class="nmSpacer"></span>
+        <button type="submit" id="noteSaveBtn">저장</button>
+      </div>
+      <p class="nmErr" id="noteErr" hidden></p>
+    </form>
+  </div>
+
+  <!-- 사원증 확인 — 이름 + 개인 접속 코드 -->
+  <div id="loginGate" hidden>
+    <form id="loginForm">
+      <div class="lgMark">T</div>
+      <h2>TERRA 연구실</h2>
+      <p class="lgSub">사원증을 확인합니다</p>
+
+      <label for="loginName">이름</label>
+      <select id="loginName" required></select>
+
+      <label for="loginCode">접속 코드</label>
+      <input id="loginCode" type="password" autocomplete="off" required
+             placeholder="사장에게 받은 코드" />
+
+      <button type="submit" id="loginBtn">출근</button>
+      <p class="lgErr" id="loginErr" hidden></p>
+    </form>
+  </div>
+
+  <script src="scene.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
