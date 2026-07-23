@@ -1396,8 +1396,15 @@ loginForm.addEventListener("submit", async (e) => {
     body: JSON.stringify({ name: loginNameSel.value, code: loginCodeEl.value }),
   }).catch(() => null);
   loginBtn.disabled = false;
-  if (!r || !r.ok) {
-    loginErrEl.textContent = "접속 코드가 맞지 않습니다.";
+  if (!r) {
+    // 서버까지 못 갔다 — 코드 문제가 아니라 주소·연결 문제 (주로 옛 터널 주소)
+    loginErrEl.textContent = "서버에 연결할 수 없습니다. 접속 주소가 최신인지 확인하세요.";
+    loginErrEl.hidden = false;
+    return;
+  }
+  if (!r.ok) {
+    // 서버는 응답했는데 거절 — 이름/코드가 안 맞음
+    loginErrEl.textContent = "이름 또는 접속 코드가 맞지 않습니다.";
     loginErrEl.hidden = false;
     loginCodeEl.value = "";
     loginCodeEl.focus();
