@@ -120,6 +120,7 @@ function releasePendingWalks() {
 }
 
 function switchDept(id) {
+  if (opsOpen) closeOps(); // 부서를 고르면 관제실에서 나온다
   if (!DEPTS[id] || id === active) return;
   releasePendingWalks();
   jobs.length = 0;
@@ -736,12 +737,132 @@ delSessionBtn.addEventListener("click", async () => {
   }
 });
 
+// ── 관제실 ────────────────────────────────────────────────────
+// 규칙 판정은 서버가 하고(무료), "왜?"를 누를 때만 AI 진단을 부른다(구독 소모).
+const contentEl = document.getElementById("content");
+const opsTab = document.getElementById("opsTab");
+const opsView = document.getElementById("opsView");
+const opsList = document.getElementById("opsList");
+const opsBadge = document.getElementById("opsBadge");
+const opsAtEl = document.getElementById("opsAt");
+const OPS_MARK = { ok: "○", warn: "△", bad: "●" };
+let opsOpen = false;
+let opsTimer = null;
+// 받아둔 AI 진단 (항목 id → 답변). 자동 갱신으로 다시 그려도 지우지 않는다 — 구독을 써서 받은 것이라
+const opsAnswers = new Map();
+
+async function loadOps(render = true) {
+  if (state.level < 3) return;
+  const r = await fetch("/ops").catch(() => null);
+  if (!r?.ok) return;
+  const { checks, at } = await r.json();
+  // 탭 뱃지는 관제실을 안 보고 있어도 이상을 알려주는 용도라 항상 갱신한다
+  const bad = checks.filter((c) => c.level !== "ok").length;
+  opsBadge.hidden = !bad;
+  opsBadge.textContent = bad;
+  opsBadge.className = "opsBadge" + (checks.some((c) => c.level === "bad") ? " bad" : "");
+  if (render && opsOpen) renderOps(checks, at);
+}
+
+function renderOps(checks, at) {
+  opsAtEl.textContent = at ? `점검 ${new Date(at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "";
+  opsList.innerHTML = "";
+  for (const c of checks) {
+    const row = document.createElement("div");
+    row.className = "opsItem " + c.level;
+
+    const mark = document.createElement("span");
+    mark.className = "opsMark";
+    mark.textContent = OPS_MARK[c.level] || "○";
+    row.appendChild(mark);
+
+    const mid = document.createElement("div");
+    mid.className = "opsMid";
+    const t = document.createElement("div");
+    t.className = "opsTitle";
+    t.textContent = c.title;
+    mid.appendChild(t);
+    const d = document.createElement("div");
+    d.className = "opsDetail";
+    d.textContent = c.detail;
+    mid.appendChild(d);
+    if (c.hint) {
+      const h = document.createElement("div");
+      h.className = "opsHint";
+      h.textContent = c.hint;
+      mid.appendChild(h);
+    }
+    const ai = document.createElement("div");
+    ai.className = "opsAi";
+    const kept = opsAnswers.get(c.id);
+    ai.hidden = !kept;
+    if (kept) ai.textContent = kept;
+    mid.appendChild(ai);
+    row.appendChild(mid);
+
+    // 정상인 항목까지 AI를 부를 이유가 없다 — 문제 있는 것만 버튼을 준다
+    if (c.level !== "ok") {
+      const ask = document.createElement("button");
+      ask.type = "button";
+      ask.className = "opsAsk";
+      ask.textContent = "왜?";
+      ask.title = "AI에게 원인과 대처를 물어봅니다 (구독 사용)";
+      ask.addEventListener("click", async () => {
+        ask.disabled = true;
+        ask.textContent = "확인 중…";
+        ai.hidden = false;
+        ai.textContent = "진단 중입니다…";
+        const r = await fetch("/ops/diagnose", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: c.id }),
+        }).catch(() => null);
+        const j = r && r.ok ? await r.json() : null;
+        const text = j?.text || "진단을 받지 못했습니다.";
+        ai.textContent = text;
+        if (j?.text) opsAnswers.set(c.id, text); // 갱신돼도 남도록 보관
+        ask.textContent = "다시 묻기";
+        ask.disabled = false;
+      });
+      row.appendChild(ask);
+    }
+    opsList.appendChild(row);
+  }
+}
+
+function openOps() {
+  opsOpen = true;
+  opsView.hidden = false;
+  contentEl.hidden = true;
+  deptTitleEl.textContent = "관제실";
+  workStateEl.hidden = true;
+  refreshTabs();
+  loadOps();
+  clearInterval(opsTimer);
+  opsTimer = setInterval(() => loadOps(), 20000); // 열어둔 동안만 자동 갱신
+}
+
+function closeOps() {
+  opsOpen = false;
+  opsView.hidden = true;
+  contentEl.hidden = false;
+  workStateEl.hidden = false;
+  clearInterval(opsTimer);
+  opsTimer = null;
+  refreshTabs();
+}
+
+opsTab.addEventListener("click", () => (opsOpen ? closeOps() : openOps()));
+document.getElementById("opsRefresh").addEventListener("click", () => loadOps());
+
 function refreshTabs() {
+  opsTab.hidden = state.level < 3;
+  opsTab.classList.toggle("on", opsOpen);
   tabsEl.innerHTML = "";
   for (const d of Object.values(DEPTS)) {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = d.id === active ? "tab on" : "tab";
+    b.className = d.id === active && !opsOpen ? "tab on" : "tab";
     const icon = document.createElement("span");
     icon.className = "material-symbols-outlined";
     icon.textContent = (DEPT_LOOK[d.id] || DEFAULT_LOOK).icon;
@@ -1421,10 +1542,12 @@ function showMe() {
     meRankEl.className = "meRank " + state.me.rank;
     meNameEl.textContent = state.me.name;
     loadNotes();
+    loadOps(false); // 관제실을 안 열어도 탭 뱃지로 이상을 알린다
     return;
   }
   meCardEl.hidden = true;
   noteBoxEl.hidden = true;
+  opsTab.hidden = true;
   loginGate.hidden = false;
   if (!loginNameSel.options.length) loadMemberNames();
 }

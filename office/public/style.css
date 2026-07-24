@@ -1282,3 +1282,108 @@ header h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* ── 관제실 ──────────────────────────────────────────────────── */
+/* 부서 탭과 같은 모양이되, 부서가 아니라는 게 보이도록 위에 실선을 두고 띄운다 */
+#opsTab {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: none;
+  border-top: 1px solid var(--outline-var);
+  border-radius: 0;
+  background: transparent;
+  color: var(--on-surface-var);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  padding-top: 14px;
+}
+#opsTab:hover { color: var(--on-surface); }
+#opsTab.on { color: var(--on-secondary-container); }
+#opsTab .opsTabName { flex: 1; }
+#opsTab .opsBadge {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--outline);
+  color: var(--surface);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+#opsTab .opsBadge.bad { background: var(--error); color: #fff; }
+
+#opsView { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+.opsHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.opsHead h3 { font-size: 18px; font-weight: 700; }
+.opsHead .opsSub { margin-top: 4px; font-size: 12.5px; color: var(--on-surface-var); }
+.opsHeadRight { display: flex; align-items: center; gap: 10px; }
+.opsHeadRight .opsAt { font-size: 12px; color: var(--outline); font-family: var(--mono); }
+#opsRefresh {
+  border: 1px solid var(--outline-var);
+  border-radius: var(--r);
+  background: var(--surface);
+  color: var(--on-surface-var);
+  padding: 6px 8px;
+  cursor: pointer;
+  display: flex;
+}
+#opsRefresh:hover { background: var(--surface-highest); }
+
+#opsList { display: flex; flex-direction: column; gap: 8px; }
+.opsItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--outline-var);
+  border-left: 3px solid var(--outline-var);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+.opsItem.warn { border-left-color: #b8860b; }
+.opsItem.bad  { border-left-color: var(--error); }
+.opsItem .opsMark { font-size: 13px; line-height: 1.6; color: var(--outline); }
+.opsItem.warn .opsMark { color: #b8860b; }
+.opsItem.bad .opsMark { color: var(--error); }
+.opsItem .opsMid { flex: 1; min-width: 0; }
+.opsItem .opsTitle { font-size: 14px; font-weight: 700; }
+.opsItem .opsDetail { margin-top: 2px; font-size: 13px; color: var(--on-surface-var); }
+.opsItem .opsHint {
+  margin-top: 6px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--outline);
+  word-break: break-word;
+}
+.opsItem .opsAi {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r);
+  background: var(--surface-lowest);
+  border: 1px solid var(--outline-var);
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.opsItem .opsAsk {
+  flex-shrink: 0;
+  border: 1px solid var(--outline-var);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--on-surface-var);
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.opsItem .opsAsk:hover:not(:disabled) { background: var(--surface-highest); color: var(--on-surface); }
+.opsItem .opsAsk:disabled { opacity: 0.6; cursor: default; }

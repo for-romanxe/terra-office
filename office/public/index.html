@@ -31,6 +31,13 @@
 
     <nav id="tabs" aria-label="부서 선택"></nav>
 
+    <!-- 관제실 — 전 부서를 한눈에 (사장 전용) -->
+    <button type="button" id="opsTab" hidden>
+      <span class="material-symbols-outlined">monitor_heart</span>
+      <span class="opsTabName">관제실</span>
+      <span class="opsBadge" id="opsBadge" hidden></span>
+    </button>
+
     <section id="prBoard" hidden aria-label="팀원별 PR 집계"></section>
 
     <!-- 메모함: 직원이 남긴 노트 (사장 전용) -->
@@ -58,6 +65,20 @@
       <span class="hDivider"></span>
       <span id="workState" class="stateChip">○ 대기중</span>
     </header>
+
+    <!-- 관제실 화면 -->
+    <div id="opsView" hidden>
+      <div class="opsHead">
+        <p class="opsSub">규칙이 상시로 훑어봅니다. 설명이 필요하면 그때만 AI를 부릅니다.</p>
+        <div class="opsHeadRight">
+          <span class="opsAt" id="opsAt"></span>
+          <button type="button" id="opsRefresh" title="다시 점검">
+            <span class="material-symbols-outlined">refresh</span>
+          </button>
+        </div>
+      </div>
+      <div id="opsList"></div>
+    </div>
 
     <div id="content">
       <div class="cols">

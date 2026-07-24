@@ -1079,7 +1079,7 @@ function requestConfirmation(dept, session, agentId, description) {
   const review = latestReview(session);
   const event = {
     type: "confirm_request", id, agent: agentId, description, review,
-    dept: dept.id, session: session.id,
+    dept: dept.id, session: session.id, at: Date.now(),
   };
   record(dept, session, { type: "confirm_request", id, agent: agentId, description, review });
   return new Promise((resolve) => {
@@ -1112,6 +1112,155 @@ function requestConfirmation(dept, session, agentId, description) {
   });
 }
 
+// ── 관제실: 규칙으로 이상을 잡아내고, 설명이 필요하면 그때만 AI를 부른다 ──────
+// 규칙 판정은 상시·무료. AI 진단은 사장님이 "왜?"를 눌렀을 때만 돌아간다(구독 소모).
+const SERVER_STARTED = Date.now();
+const pollHealth = { lastRun: 0, repos: {} }; // repo → { okAt, failAt, error, fails }
+
+function notePollOk(repo) {
+  const r = (pollHealth.repos[repo] ||= { okAt: 0, failAt: 0, error: "", fails: 0 });
+  r.okAt = Date.now();
+  r.fails = 0;
+  r.error = "";
+}
+function notePollFail(repo, err) {
+  const r = (pollHealth.repos[repo] ||= { okAt: 0, failAt: 0, error: "", fails: 0 });
+  r.failAt = Date.now();
+  r.fails++;
+  r.error = String(err?.message || err).split("\n")[0].slice(0, 200);
+}
+
+const mins = (ms) => Math.floor(ms / 60000);
+function since(ts) {
+  if (!ts) return "없음";
+  const m = mins(Date.now() - ts);
+  return m < 1 ? "방금" : m < 60 ? `${m}분 전` : `${Math.floor(m / 60)}시간 전`;
+}
+
+// 점검 항목 하나. level: ok | warn | bad
+const chk = (id, title, level, detail, hint = "") => ({ id, title, level, detail, hint });
+
+function runChecks() {
+  const out = [];
+
+  // 1) 부서가 한 업무에 너무 오래 붙잡혀 있지 않은가
+  for (const d of Object.values(DEPARTMENTS)) {
+    if (!d.busy) {
+      out.push(chk(`dept:${d.id}`, `${d.name}`, "ok", "대기 중"));
+      continue;
+    }
+    const m = mins(Date.now() - (d.busySince || Date.now()));
+    const level = m >= 15 ? "bad" : m >= 8 ? "warn" : "ok";
+    out.push(chk(`dept:${d.id}`, `${d.name}`, level, `${m}분째 업무 중`,
+      level === "ok" ? "" : "한 지시가 오래 걸리고 있습니다. 그 부서는 끝날 때까지 새 지시를 못 받습니다."));
+  }
+
+  // 2) 결재 대기 — 놓치면 자동 반려된다
+  const pend = [...pendingConfirms.values()].map((p) => p.event);
+  if (!pend.length) {
+    out.push(chk("confirm", "결재 대기", "ok", "없음"));
+  } else {
+    const left = pend.map((e) => 5 - mins(Date.now() - (e.at || Date.now())));
+    const soon = Math.min(...left);
+    out.push(chk("confirm", "결재 대기", soon <= 2 ? "bad" : "warn",
+      `${pend.length}건 · 가장 급한 건 약 ${Math.max(soon, 0)}분 남음`,
+      "5분 안에 승인하지 않으면 자동 반려됩니다. " + pend.map((e) => e.description).join(" / ")));
+  }
+
+  // 3) 깃허브 감시가 살아 있는가
+  const watches = readJson(WATCH_FILE, []);
+  if (!watches.length) {
+    out.push(chk("watch", "깃허브 감시", "warn", "등록된 저장소 없음",
+      "대회 때 팀원 push를 자동 접수하려면 pr-watch.json에 저장소를 등록해야 합니다."));
+  } else {
+    const broken = watches.filter((w) => (pollHealth.repos[w.repo]?.fails || 0) > 0);
+    const lag = pollHealth.lastRun ? mins(Date.now() - pollHealth.lastRun) : 99;
+    let level = "ok", detail = `${watches.length}개 감시 중 · 마지막 확인 ${since(pollHealth.lastRun)}`;
+    let hint = "";
+    if (broken.length) {
+      level = "bad";
+      const b = broken[0];
+      detail = `${b.repo} 조회 실패 ${pollHealth.repos[b.repo].fails}회 연속`;
+      hint = pollHealth.repos[b.repo].error;
+    } else if (lag > 5) {
+      level = "warn";
+      hint = "폴링이 멈춘 것처럼 보입니다. 서버 로그를 확인하세요.";
+    }
+    out.push(chk("watch", "깃허브 감시", level, detail, hint));
+  }
+
+  // 4) 누가 접속해 있나
+  const roster = readMembers();
+  out.push(chk("people", "사원 접속", "ok",
+    `명부 ${roster.length}명 · 지금 접속 ${sseClients.size}명`,
+    roster.map((m) => `${m.rank} ${m.name}`).join(", ")));
+
+  // 5) 팀원이 밖에서 들어올 통로(터널)가 열려 있나
+  let tunnelUp = false;
+  try {
+    execFileSync("pgrep", ["-f", "cloudflared tunnel"], { timeout: 3000 });
+    tunnelUp = true;
+  } catch { /* 안 돌고 있으면 pgrep이 비정상 종료한다 */ }
+  out.push(chk("tunnel", "외부 접속 터널", tunnelUp ? "ok" : "warn",
+    tunnelUp ? "열려 있음" : "닫혀 있음",
+    tunnelUp ? "" : "지금은 같은 와이파이에서만 접속됩니다. 밖에서 들어오려면 office/tunnel.sh를 실행하세요."));
+
+  // 6) 비서실 아카이버 담당이 쓰는 DB가 제자리에 있나
+  const dbOk = fs.existsSync(ARCHIVE_DB);
+  out.push(chk("archive", "아카이버 DB", dbOk ? "ok" : "warn",
+    dbOk ? "연결 가능" : "파일 없음",
+    dbOk ? "" : `${ARCHIVE_DB} 가 없습니다. 아카이버 담당 도구만 실패하고 나머지는 정상입니다.`));
+
+  // 7) 서버 자체
+  out.push(chk("server", "사무실 서버", "ok",
+    `가동 ${since(SERVER_STARTED).replace(" 전", "")} · 감시 주기 ${PR_POLL_MS / 1000}초`));
+
+  return out;
+}
+
+// 사장님이 "왜?"를 눌렀을 때만 부르는 진단. 도구 없이 한 번만 물어본다 — 짧게, 싸게.
+// 서버 로그 꼬리를 함께 넘겨서 추측이 아니라 실제 흔적을 보고 말하게 한다.
+function recentLog(lines = 40) {
+  try {
+    const text = fs.readFileSync("/tmp/office.log", "utf8");
+    return text.split("\n").slice(-lines).join("\n").slice(-4000);
+  } catch {
+    return "(로그를 읽지 못함)";
+  }
+}
+
+async function diagnose(item) {
+  const prompt =
+    `너는 사내 AI 사무실 시스템("TERRA 연구실")의 운영 담당이다. 관제 점검에서 아래 항목이 걸렸다.\n\n` +
+    `[항목] ${item.title}\n[판정] ${item.level}\n[상태] ${item.detail}\n` +
+    (item.hint ? `[규칙이 붙인 설명] ${item.hint}\n` : "") +
+    `\n[서버 로그 최근 기록]\n${recentLog()}\n\n` +
+    `사장님(개발자지만 이 시스템 내부는 다 기억 못 함)에게 한국어로 설명해라.\n` +
+    `1) 지금 무슨 일이 벌어지고 있는지 두세 문장\n` +
+    `2) 당장 해야 할 일이 있으면 구체적인 명령·클릭 순서로. 없으면 "지켜봐도 됩니다"라고 분명히 말해라.\n` +
+    `로그에 근거가 없으면 지어내지 말고 "로그만으로는 알 수 없다"고 해라. 전체 8줄을 넘기지 마라.`;
+
+  const q = query({
+    prompt,
+    options: {
+      model: "claude-haiku-4-5", // 판단이 아니라 설명이라 작은 모델로 충분하다
+      systemPrompt: "너는 간결하고 정확한 운영 담당이다. 추측을 사실처럼 말하지 않는다.",
+      allowedTools: [],
+      disallowedTools: BLOCKED_BUILTINS,
+      maxTurns: 1,
+      cwd: HOME,
+      env: AGENT_ENV,
+    },
+  });
+  let answer = "";
+  for await (const msg of q) {
+    if (msg.type === "assistant") {
+      for (const c of msg.message.content || []) if (c.type === "text") answer += c.text;
+    }
+  }
+  return answer.trim() || "(진단 내용을 받지 못했습니다)";
+}
+
 // 팀원에게 위임된 업무 하나를 수행시키고 최종 보고를 받는다
 async function runEmployee(dept, session, id, request) {
   const emp = dept.employees[id];
@@ -1122,6 +1271,7 @@ async function runEmployee(dept, session, id, request) {
 
 async function work(dept, session, text, name, file = null, rank = "") {
   dept.busy = true;
+  dept.busySince = Date.now(); // 관제실이 "몇 분째 붙잡혀 있나"를 보려고 쓴다
   record(dept, session, {
     type: "user", text, name, rank,
     ...(file ? { file: { name: file.name, url: file.url, size: file.size } } : {}),
@@ -1149,6 +1299,7 @@ async function work(dept, session, text, name, file = null, rank = "") {
   }
 
   dept.busy = false;
+  dept.busySince = 0;
   broadcast({ type: "done", dept: dept.id, session: session.id });
   try {
     saveSession(dept, session);
@@ -1218,6 +1369,41 @@ const server = http.createServer(async (req, res) => {
     const client = { res, boss };
     sseClients.add(client);
     req.on("close", () => sseClients.delete(client));
+    return;
+  }
+
+  // ── 관제실 ──────────────────────────────────────────────────
+  // 전 부서·사원 접속·터널까지 한눈에 보는 화면이라 사장 전용이다.
+  if (url.pathname === "/ops" || url.pathname === "/ops/diagnose") {
+    if (!isBoss(req)) {
+      res.writeHead(403, { "Content-Type": "application/json" }).end('{"error":"boss only"}');
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/ops") {
+      res.writeHead(200, { "Content-Type": "application/json" })
+        .end(JSON.stringify({ checks: runChecks(), at: new Date().toISOString() }));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/ops/diagnose") {
+      let body = "";
+      for await (const chunk of req) body += chunk;
+      let id = "";
+      try { id = String(JSON.parse(body || "{}").id || ""); } catch {}
+      const item = runChecks().find((c) => c.id === id);
+      if (!item) {
+        res.writeHead(404, { "Content-Type": "application/json" }).end('{"error":"no such check"}');
+        return;
+      }
+      try {
+        const text = await diagnose(item);
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ text }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+          .end(JSON.stringify({ error: String(err?.message || err).slice(0, 300) }));
+      }
+      return;
+    }
+    res.writeHead(405, { "Content-Type": "application/json" }).end('{"error":"method not allowed"}');
     return;
   }
 
@@ -1676,6 +1862,7 @@ function findOrCreateSession(dept, title) {
 async function pollPRs() {
   const watches = readJson(WATCH_FILE, []);
   if (!Array.isArray(watches) || !watches.length) return;
+  pollHealth.lastRun = Date.now();
   const seen = readJson(SEEN_FILE, {});
 
   for (const w of watches) {
@@ -1690,8 +1877,10 @@ async function pollPRs() {
           "--jq", "[.[] | {name: .name, sha: .commit.sha}]"]));
       } catch (err) {
         console.error(`브랜치 감시 실패 (${w.repo}):`, err.message?.slice(0, 200));
+        notePollFail(w.repo, err);
         continue;
       }
+      notePollOk(w.repo);
       const key = w.repo + "@branches";
       if (!seen[key]) {
         seen[key] = Object.fromEntries(branches.map((b) => [b.name, b.sha]));
@@ -1744,8 +1933,11 @@ async function pollPRs() {
         "--json", "number,title,author,headRefOid,isDraft"]));
     } catch (err) {
       console.error(`PR 감시 실패 (${w.repo}):`, err.message?.slice(0, 200));
+      notePollFail(w.repo, err);
       continue;
     }
+
+    notePollOk(w.repo);
 
     // 처음 보는 저장소는 기준선만 잡는다 (기존 PR을 몰아서 점검하지 않음)
     if (!seen[w.repo]) {
