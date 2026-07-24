@@ -383,11 +383,29 @@ function zodShapeFrom(schema) {
 }
 
 // 결재가 필요한 도구: 실행 전에 사장님 승인을 받는다
+// 지금 그 저장소가 어느 브랜치에 서 있는지. 병합은 "현재 브랜치"로 들어가므로 결재 전에 반드시 보여준다.
+function currentBranch(repo) {
+  try {
+    return execFileSync("git", ["-C", String(repo), "rev-parse", "--abbrev-ref", "HEAD"],
+      { encoding: "utf8", timeout: 5000 }).trim();
+  } catch {
+    return "";
+  }
+}
+
 const GATED_TOOLS = {
   delete_note: (input) => `보관 메모 삭제 (${input?.title})`,
   archive_delete_scrap: (input) => `공고 스크랩 삭제 (id: ${input?.id})`,
-  git_merge: (input) => `브랜치 병합 (repo: ${input?.repo}, branch: ${input?.branch})`,
-  git_push: (input) => `원격 저장소로 push (repo: ${input?.repo})`,
+  // 어디"로" 들어가는지가 빠지면 엉뚱한 브랜치에 병합돼도 승인자가 알아챌 수 없다
+  git_merge: (input) => {
+    const into = currentBranch(input?.repo);
+    const warn = into && !/^(main|master)$/.test(into) ? "  ⚠ main이 아닙니다" : "";
+    return `브랜치 병합: ${input?.branch} → ${into || "현재 브랜치"}${warn}\n(repo: ${input?.repo})`;
+  },
+  git_push: (input) => {
+    const from = currentBranch(input?.repo);
+    return `원격 저장소로 push: ${from || "현재 브랜치"}\n(repo: ${input?.repo})`;
+  },
 };
 
 const USER_MEMORY_DIR = path.join(HOME, ".claude", "projects", "-Users-for-romanxe", "memory");
@@ -986,8 +1004,8 @@ function buildEmployeeTools(dept, session, agentId, emp) {
           const result = runLocalTool(def.name, input);
           if (def.name === "save_note" || def.name === "delete_note") notesChanged();
           // PM 봇 알림창: 결재까지 통과해서 실제로 실행된 병합·푸시만 남긴다
-          if (def.name === "git_merge") logGit(dept, "merge", `MERGE: ${input.branch} → 현재 브랜치`);
-          if (def.name === "git_push") logGit(dept, "push", "PUSH: 원격 저장소로 푸시 완료");
+          if (def.name === "git_merge") logGit(dept, "merge", `MERGE: ${input.branch} → ${currentBranch(input.repo) || "현재 브랜치"}`);
+          if (def.name === "git_push") logGit(dept, "push", `PUSH: ${currentBranch(input.repo) || "현재 브랜치"} → 원격`);
           return { content: [{ type: "text", text: String(result) }] };
         } catch (err) {
           return { content: [{ type: "text", text: "오류: " + (err?.message || String(err)) }], isError: true };
@@ -1029,9 +1047,11 @@ const pendingConfirms = new Map(); // id → { resolve(approve), event }
 // 서버가 살아있는 동안만 유지되면 충분하다 (재시작하면 다음 push 때 다시 채워진다).
 const branchPusher = new Map(); // "feature/payment" → "연성"
 
-// 결재 설명에서 브랜치 이름을 뽑아 push한 사람을 찾는다
+// 결재 설명에서 브랜치 이름을 뽑아 push한 사람을 찾는다.
+// 설명 형식이 바뀌어도 견디도록 두 가지를 다 본다: "병합: origin/브랜치 → main"과 옛 "branch: …"
 function pusherOf(description) {
-  const m = String(description).match(/branch:\s*(?:origin\/)?([^\s,)]+)/);
+  const s = String(description);
+  const m = s.match(/병합:\s*(?:origin\/)?([^\s→]+)/) || s.match(/branch:\s*(?:origin\/)?([^\s,)]+)/);
   return m ? branchPusher.get(m[1]) || "" : "";
 }
 
