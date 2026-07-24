@@ -11,6 +11,7 @@ office/uploads/
 office/boards/
 office/pr-seen.json
 office/pr-stats.json
+office/git-log.json
 
 # 개인 메모함
 notes/

@@ -333,11 +333,15 @@ const PM_KIND = {
   push:  { icon: "🚀", label: "push" },
   pr:    { icon: "🔀", label: "pr" },
   merge: { icon: "🛠", label: "merge" },
+  gate:  { icon: "🔏", label: "결재" },
   info:  { icon: "📝", label: "info" },
 };
 
 function pmRow(entry) {
   const kind = PM_KIND[entry.kind] ? entry.kind : "info";
+  // 점검 의견이 딸린 줄(결재)은 눌러서 펼치는 묶음으로 만든다 — 평소엔 한 줄, 필요할 때 전문
+  if (entry.detail) return pmRowWithDetail(entry, kind);
+
   const row = document.createElement("div");
   row.className = "pmRow " + kind;
 
@@ -359,6 +363,37 @@ function pmRow(entry) {
     : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   row.appendChild(when);
   return row;
+}
+
+// 결재 줄 — 요약 한 줄을 누르면 점검관 의견 전문이 그 자리에서 펼쳐진다
+function pmRowWithDetail(entry, kind) {
+  const wrap = document.createElement("details");
+  wrap.className = "pmDetails " + kind;
+
+  const sum = document.createElement("summary");
+  sum.className = "pmRow " + kind;
+  const icon = document.createElement("span");
+  icon.className = "pmIcon";
+  icon.textContent = PM_KIND[kind].icon;
+  sum.appendChild(icon);
+  const text = document.createElement("span");
+  text.className = "pmText";
+  text.textContent = entry.text;
+  sum.appendChild(text);
+  const when = document.createElement("span");
+  when.className = "pmTime";
+  const d = new Date(entry.at);
+  when.textContent = Number.isNaN(d.getTime())
+    ? ""
+    : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  sum.appendChild(when);
+  wrap.appendChild(sum);
+
+  const body = document.createElement("div");
+  body.className = "pmDetailBody";
+  body.textContent = entry.detail;
+  wrap.appendChild(body);
+  return wrap;
 }
 
 function renderPmBot() {
@@ -886,6 +921,21 @@ function addConfirmCard(ev) {
   what.className = "cWhat";
   what.textContent = ev.description;
   body.appendChild(what);
+  // 점검관이 뭘 지적했는지 카드 안에서 바로 읽고 판단하도록 원문을 붙인다
+  if (ev.review?.text) {
+    const rv = document.createElement("div");
+    rv.className = "cReview";
+    const rvHead = document.createElement("div");
+    rvHead.className = "cReviewHead";
+    const who = DEPTS[ev.dept]?.meta?.[ev.review.by]?.name || "점검관";
+    rvHead.textContent = `${who} 점검 의견`;
+    rv.appendChild(rvHead);
+    const rvBody = document.createElement("div");
+    rvBody.className = "cReviewBody";
+    rvBody.textContent = ev.review.text;
+    rv.appendChild(rvBody);
+    body.appendChild(rv);
+  }
   const warn = document.createElement("div");
   warn.className = "cWarn";
   warn.textContent = "※ 이 작업은 되돌릴 수 없습니다.";
@@ -1018,6 +1068,7 @@ function chatFor(ev) {
 // 저장된 세션 기록을 채팅으로만 복원한다 (장면 연기는 하지 않음)
 function replayEvent(ev) {
   if (ev.type === "confirm_request") {
+    if (state.pendingIds?.has(ev.id)) return; // 아직 대기 중 — 아래에서 카드로 다시 뜬다
     addChat(ev.dept, ev.session, { text: `결재 요청 — ${ev.description}`, trace: "sys", icon: "gavel" });
     return;
   }
@@ -1119,7 +1170,13 @@ function handleEvent(ev) {
           gitLog: d.gitLog || [], gitRepo: d.gitRepo || "",
         };
       }
+      // 아직 안 끝난 결재는 기록 복원 때 글자 한 줄로 흘리지 않고 카드로 되살린다
+      state.pendingIds = new Set((ev.pendingConfirms || []).map((c) => c.id));
       switchDept(ev.departments[0].id);
+      for (const c of ev.pendingConfirms || []) {
+        confirmMeta.set(c.id, { dept: c.dept, session: c.session, agent: c.agent });
+        addConfirmCard(c);
+      }
       break;
     }
 

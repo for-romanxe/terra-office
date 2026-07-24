@@ -826,12 +826,18 @@ const GIT_LOG_KEEP = 60;
 function readGitLog() {
   return readJson(GIT_LOG_FILE, {});
 }
-// kind: push | pr | merge | info
-function logGit(dept, kind, text) {
+// kind: push | pr | merge | gate | info
+// detail: 줄에 접어 넣을 긴 본문 (결재 줄에 점검관 의견을 싣는 용도). 파일이 붓지 않게 잘라 담는다.
+const GIT_LOG_DETAIL_MAX = 1200;
+function logGit(dept, kind, text, detail = "") {
   if (!dept?.prBoard) return; // PM 봇 알림창이 있는 부서에서만
   const all = readGitLog();
   const list = (all[dept.id] ||= []);
   const entry = { kind, text, at: new Date().toISOString() };
+  if (detail) {
+    const t = String(detail).trim();
+    entry.detail = t.length > GIT_LOG_DETAIL_MAX ? t.slice(0, GIT_LOG_DETAIL_MAX) + "\n…(생략)" : t;
+  }
   list.push(entry);
   if (list.length > GIT_LOG_KEEP) list.splice(0, list.length - GIT_LOG_KEEP);
   fs.writeFileSync(GIT_LOG_FILE, JSON.stringify(all, null, 2));
@@ -1016,22 +1022,92 @@ function buildChiefTools(dept, session) {
 }
 
 // ── 결재 대기열: 파괴적 도구는 사장님이 승인해야 실행된다 ──────────
-const pendingConfirms = new Map(); // id → resolve(approve: boolean)
+// 결재 내용도 함께 들고 있는다 — 새로 접속한(새로고침한) 사장님에게 카드를 다시 띄워야 하기 때문.
+const pendingConfirms = new Map(); // id → { resolve(approve), event }
+
+// 브랜치를 누가 push했는지 기억해 둔다 — 반려됐을 때 "누가 고쳐야 하는지"를 알림에 적기 위해.
+// 서버가 살아있는 동안만 유지되면 충분하다 (재시작하면 다음 push 때 다시 채워진다).
+const branchPusher = new Map(); // "feature/payment" → "연성"
+
+// 결재 설명에서 브랜치 이름을 뽑아 push한 사람을 찾는다
+function pusherOf(description) {
+  const m = String(description).match(/branch:\s*(?:origin\/)?([^\s,)]+)/);
+  return m ? branchPusher.get(m[1]) || "" : "";
+}
+
+// 점검관 보고에서 치명·경고 건수를 센다. 형식이 안 맞으면 세지 않는다 (틀린 숫자보다 없는 게 낫다).
+function tallyFindings(text) {
+  if (!text) return "";
+  const lines = String(text).split("\n");
+  const count = { 치명: 0, 경고: 0 };
+  let section = null;
+  for (const raw of lines) {
+    const line = raw.trim();
+    // 항목("1. …" / "**1. …**")을 먼저 본다 — 굵은 글씨 항목을 제목으로 오인하지 않도록
+    if (/^\*{0,2}\d+\.\s/.test(line)) {
+      if (section) count[section]++;
+      continue;
+    }
+    if (/^#{1,4}\s/.test(line) || /^\*\*[^*]+\*\*$/.test(line)) {
+      if (/치명/.test(line)) section = "치명";
+      else if (/경고/.test(line)) section = "경고";
+      else section = null;
+      if (section && /없(음|습니다)/.test(line)) section = null; // "치명 — 없음"
+    }
+  }
+  const parts = [];
+  if (count.치명) parts.push(`치명 ${count.치명}건`);
+  if (count.경고) parts.push(`경고 ${count.경고}건`);
+  return parts.join(" · ");
+}
+
+// 결재 카드에 붙일 점검 코멘트 — 이 세션에서 점검관이 마지막으로 낸 보고를 그대로 싣는다.
+// 요약하지 않는 이유: 사장님이 "무슨 문제인지" 직접 읽고 승인·반려를 정해야 하기 때문.
+function latestReview(session) {
+  for (let i = session.events.length - 1; i >= 0; i--) {
+    const e = session.events[i];
+    if (e.type === "confirm_result") break; // 지난 결재보다 뒤엣것만 본다
+    if (e.type === "report" && /inspector/.test(e.from || "")) {
+      return { by: e.from, text: String(e.text || "") };
+    }
+  }
+  return null;
+}
 
 function requestConfirmation(dept, session, agentId, description) {
   const id = crypto.randomBytes(6).toString("base64url");
-  record(dept, session, { type: "confirm_request", id, agent: agentId, description });
+  const review = latestReview(session);
+  const event = {
+    type: "confirm_request", id, agent: agentId, description, review,
+    dept: dept.id, session: session.id,
+  };
+  record(dept, session, { type: "confirm_request", id, agent: agentId, description, review });
   return new Promise((resolve) => {
+    // 결재 결과를 PM 봇 창에 남긴다. 반려됐을 때 "누가 무엇을 왜" 고쳐야 하는지가 한 줄에 다 보이도록
+    // push한 사람 이름과 치명·경고 건수를 붙이고, 점검관 의견 원문은 접힌 본문으로 싣는다.
+    const gateLog = (head) => {
+      const who = pusherOf(description);
+      const tally = tallyFindings(review?.text);
+      const parts = [head, description];
+      if (who) parts.push(`push: ${who}`);
+      if (tally) parts.push(tally);
+      logGit(dept, "gate", parts.join(" — "), review?.text || "");
+    };
     const timer = setTimeout(() => {
       if (pendingConfirms.delete(id)) {
         record(dept, session, { type: "confirm_result", id, approve: false, timeout: true });
+        gateLog("결재 시한 경과 · 자동 반려");
         resolve(false); // 5분간 결재가 없으면 자동 반려
       }
     }, 5 * 60 * 1000);
-    pendingConfirms.set(id, (approve) => {
-      clearTimeout(timer);
-      record(dept, session, { type: "confirm_result", id, approve });
-      resolve(approve);
+    pendingConfirms.set(id, {
+      event,
+      resolve: (approve) => {
+        clearTimeout(timer);
+        record(dept, session, { type: "confirm_result", id, approve });
+        gateLog(`결재 ${approve ? "승인" : "반려"}`);
+        resolve(approve);
+      },
     });
   });
 }
@@ -1124,6 +1200,11 @@ const server = http.createServer(async (req, res) => {
           })),
         },
       }));
+    // 아직 안 끝난 결재를 함께 내려보낸다 — 새로고침해도 승인 버튼이 사라지지 않도록.
+    // 비공개 부서(비서실)의 결재는 사장에게만 보인다.
+    const pending = [...pendingConfirms.values()]
+      .map((p) => p.event)
+      .filter((e) => !(DEPARTMENTS[e.dept]?.private && !boss));
     res.write(
       `data: ${JSON.stringify({
         type: "hello",
@@ -1131,6 +1212,7 @@ const server = http.createServer(async (req, res) => {
         departments,
         owner: boss,
         me: me ? { name: me.name, rank: me.rank, level: RANKS[me.rank] || 0 } : null,
+        pendingConfirms: pending,
       })}\n\n`
     );
     const client = { res, boss };
@@ -1188,13 +1270,13 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(403, { "Content-Type": "application/json" }).end('{"error":"boss only"}');
       return;
     }
-    const resolve = pendingConfirms.get(id);
-    if (!resolve) {
+    const pending = pendingConfirms.get(id);
+    if (!pending) {
       res.writeHead(404, { "Content-Type": "application/json" }).end('{"error":"no such confirm"}');
       return;
     }
     pendingConfirms.delete(id);
-    resolve(approve);
+    pending.resolve(approve);
     res.writeHead(200, { "Content-Type": "application/json" }).end('{"ok":true}');
     return;
   }
@@ -1567,7 +1649,9 @@ server.listen(PORT, () => {
 // office/pr-seen.json: 이미 본 PR의 head 커밋 기록 (새 PR·새 커밋 감지용)
 const WATCH_FILE = path.join(__dirname, "pr-watch.json");
 const SEEN_FILE = path.join(__dirname, "pr-seen.json");
-const PR_POLL_MS = Number(process.env.PR_POLL_MS) || 180000;
+// 깃허브에 "새 push 있냐"고 물어보는 간격. 대회 중 기다리는 시간을 줄이려고 1분으로 둔다.
+// 더 짧게·길게 쓰려면 PR_POLL_MS 환경변수로 덮어쓴다 (예: PR_POLL_MS=30000 node office/server.mjs)
+const PR_POLL_MS = Number(process.env.PR_POLL_MS) || 60000;
 
 function readJson(file, fallback) {
   try {
@@ -1642,6 +1726,7 @@ async function pollPRs() {
       const pusher = who || author.name || author.login || "?";
       if (!who) console.log(`PR 집계 보류: ${w.repo} ${b.name} push한 "${pusher}"가 스코어보드 이름과 안 맞음`);
 
+      branchPusher.set(b.name, pusher); // 나중에 반려 알림에 "누가 고쳐야 하는지" 적는다
       const session = findOrCreateSession(dept, w.session || w.repo.split("/").pop());
       console.log(`브랜치 push 감지: ${w.repo} ${b.name} → 세션 "${session.title}"`);
       logGit(dept, "push", `PUSH: ${b.name} — ${pusher} (${b.sha.slice(0, 7)}${lines ? `, ${lines}줄` : ""})`);

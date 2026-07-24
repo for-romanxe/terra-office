@@ -928,6 +928,29 @@ header h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
 .confirm .cBody .cWhat { font-size: 14px; font-weight: 600; white-space: pre-wrap; word-break: break-word; }
 .confirm .cBody .cWarn { font-size: 11px; color: var(--error); margin-top: 5px; }
 
+/* 점검관 의견 — 승인 전에 읽으라고 카드 안에 통째로 넣는다. 길면 안에서 스크롤한다 */
+.confirm .cBody .cReview {
+  margin-top: 12px;
+  border-top: 1px dashed var(--outline-var);
+  padding-top: 10px;
+  text-align: left;
+}
+.confirm .cBody .cReviewHead {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--secondary);
+  margin-bottom: 6px;
+}
+.confirm .cBody .cReviewBody {
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
 /* 이사·본부장이 보는 결재 카드 — 버튼 없이 대기 안내만 */
 .confirm .cWaiting {
   font-size: 12px;
@@ -1124,9 +1147,34 @@ header h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
 #pmLog .pmRow.push  { border-left-color: #e9c877; }
 #pmLog .pmRow.pr    { border-left-color: #7fd6e8; }
 #pmLog .pmRow.merge { border-left-color: #8fd8a8; }
+#pmLog .pmRow.gate  { border-left-color: #d99b8f; } /* 결재 — 도장 붉은색 계열 */
+
+/* 점검 의견이 딸린 결재 줄 — 접었다 펴는 묶음 */
+#pmLog .pmDetails > summary { cursor: pointer; list-style: none; }
+#pmLog .pmDetails > summary::-webkit-details-marker { display: none; }
+#pmLog .pmDetails > summary::after {
+  content: "＋"; flex-shrink: 0; color: #7c8ca6; font-size: 12px; margin-left: 6px;
+}
+#pmLog .pmDetails[open] > summary::after { content: "－"; }
+#pmLog .pmDetailBody {
+  margin: 4px 0 8px 14px;
+  padding: 10px 12px;
+  border-left: 2px solid rgba(217, 155, 143, 0.5);
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 0 var(--r) var(--r) 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.65;
+  color: #d8dde6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+}
 #pmLog .pmRow.push .pmText  { color: #f0dda8; }
 #pmLog .pmRow.pr .pmText    { color: #b9e8f4; }
 #pmLog .pmRow.merge .pmText { color: #bfe9cd; }
+#pmLog .pmRow.gate .pmText  { color: #f0c4ba; }
 
 /* ── 부서 게시판 ─────────────────────────────────────────── */
 #teamBoard {
