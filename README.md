@@ -82,7 +82,7 @@ office/departments/<부서>/
 order: 1                    # 연차 — 책상 배정 순서
 id: clerk
 name: 기록 담당
-model: claude-haiku-4-5     # 생략 시 claude-opus-4-8
+model: claude-haiku-4-5     # 생략 시 claude-opus-5
 color: "#33406e"
 tools: save_note, list_notes, read_note
 duty: 명패에 뜨는 한 줄 소개

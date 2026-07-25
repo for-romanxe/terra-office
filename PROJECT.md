@@ -51,7 +51,7 @@
 order: 1              # 연차(책상 배정 순서)
 id: clerk
 name: 기록 담당
-model: claude-haiku-4-5   # 생략 시 claude-opus-4-8
+model: claude-haiku-4-5   # 생략 시 claude-opus-5
 effort: low           # 생략 시 low, 실장은 medium
 color: "#33406e"
 tools: save_note, list_notes, read_note, read_user_context
@@ -134,7 +134,7 @@ duty: 한 줄 소개(명패·범례에 표시)
 
 ### 직원별 모델 선택
 
-- md의 `model:` 필드. 기본 `claude-opus-4-8`, 기록 담당은 `claude-haiku-4-5`
+- md의 `model:` 필드. 기본 `claude-opus-5`(2026-07-26 opus-4-8→5), 기록·아카이버·물커톤 통합 담당은 `claude-haiku-4-5`
 - 서버가 haiku/sonnet-4-5 계열엔 adaptive thinking·effort 파라미터를 자동 생략(400 방지)
 - 설계 원칙: **역할마다 "지능 단가"를 다르게 책정**
 

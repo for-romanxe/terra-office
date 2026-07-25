@@ -20,7 +20,7 @@ const HOME = process.env.HOME;
 fs.mkdirSync(NOTES_DIR, { recursive: true });
 
 const PORT = 3010;
-const MODEL = "claude-opus-4-8";
+const MODEL = "claude-opus-5"; // 기본 모델 (기록·아카이버·물커톤 통합 담당만 md에서 haiku로 별도 지정)
 // "claude-opus-4-8" → "Opus 4.8" 처럼 범례에 짧게 보여주기 위한 변환
 function modelLabel(id) {
   const m = String(id || "").match(/^claude-([a-z]+)-(\d+)(?:-(\d+))?$/);
