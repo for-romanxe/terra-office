@@ -787,6 +787,22 @@ function renderLobby(people) {
 
 // ── 관제실 ────────────────────────────────────────────────────
 // 규칙 판정은 서버가 하고(무료), "왜?"를 누를 때만 AI 진단을 부른다(구독 소모).
+// ── 테마 (다크/화이트) — 초기 적용은 head 인라인 스크립트가, 전환은 여기서 ──
+const themeToggle = document.getElementById("themeToggle");
+function applyThemeIcon() {
+  const dark = document.documentElement.dataset.theme === "dark";
+  // 지금이 다크면 "해"(화이트로 전환), 화이트면 "달"(다크로 전환)을 보여준다
+  themeToggle.querySelector(".material-symbols-outlined").textContent = dark ? "light_mode" : "dark_mode";
+  themeToggle.title = dark ? "화이트 모드로 전환" : "다크 모드로 전환";
+}
+applyThemeIcon();
+themeToggle.addEventListener("click", () => {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem("officeTheme", next);
+  applyThemeIcon();
+});
+
 const contentEl = document.getElementById("content");
 const opsTab = document.getElementById("opsTab");
 const opsView = document.getElementById("opsView");
@@ -1007,6 +1023,37 @@ function scene(ev, job) {
 }
 
 // ── 메신저 로그 (부서·세션별) ──────────────────────────────────
+// 말풍선 복사 버튼 — 눌러 클립보드에 넣고 잠깐 체크 표시로 바뀐다
+function makeCopyBtn(text) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "copyBtn";
+  btn.title = "복사";
+  btn.innerHTML = '<span class="material-symbols-outlined">content_copy</span>';
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // clipboard API가 막힌 환경(비보안 컨텍스트 등) 대비 폴백
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch {}
+      ta.remove();
+    }
+    btn.classList.add("copied");
+    btn.innerHTML = '<span class="material-symbols-outlined">check</span>';
+    setTimeout(() => {
+      btn.classList.remove("copied");
+      btn.innerHTML = '<span class="material-symbols-outlined">content_copy</span>';
+    }, 1200);
+  });
+  return btn;
+}
+
 function addChat(deptId, sessionId, { who, rank, text, cls, color, file, files, trace, icon }) {
   if (!DEPTS[deptId] || !sessionId) return;
   const log = ensureLog(deptId, sessionId).el;
@@ -1044,6 +1091,9 @@ function addChat(deptId, sessionId, { who, rank, text, cls, color, file, files, 
     body.className = "body";
     body.textContent = text;
     div.appendChild(body);
+
+    // 복사 버튼 — 드래그 없이 이 말풍선 내용을 그대로 복사한다
+    if (text) div.appendChild(makeCopyBtn(text));
   }
 
   // 첨부 파일: files(배열) 또는 옛 file(단일) 둘 다 받는다. 누르면 다운로드된다

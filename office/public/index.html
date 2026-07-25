@@ -9,16 +9,27 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400..700&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
   <link rel="stylesheet" href="style.css" />
+  <script>
+    // 첫 그림 전에 테마를 적용해 깜빡임을 막는다. 저장값 우선, 없으면 시스템 설정을 따른다.
+    (function () {
+      var t = localStorage.getItem("officeTheme");
+      if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      document.documentElement.dataset.theme = t;
+    })();
+  </script>
 </head>
 <body>
   <!-- ── 좌측 부서 네비 ───────────────────────────────────────── -->
   <aside id="sidebar">
     <div class="brand">
       <div class="brandMark">T</div>
-      <div>
+      <div class="brandText">
         <h1>TERRA 연구실</h1>
         <p>AI Enterprise Control</p>
       </div>
+      <button type="button" id="themeToggle" title="다크/화이트 모드 전환">
+        <span class="material-symbols-outlined">dark_mode</span>
+      </button>
     </div>
 
     <div id="meCard" hidden>

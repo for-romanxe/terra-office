@@ -42,6 +42,37 @@
   --mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", monospace;
 }
 
+/* 다크 모드 — 색 토큰만 갈아끼운다. 나머지 규칙은 전부 var()라 자동으로 따라온다 */
+:root[data-theme="dark"] {
+  --surface: #15181b;
+  --surface-lowest: #1b1f23;
+  --surface-low: #202429;
+  --surface-c: #1a1e22;
+  --surface-high: #262b30;
+  --surface-highest: #2d3237;
+
+  --on-surface: #e3e4e7;
+  --on-surface-var: #b6b9c0;
+  --outline: #8a8e95;
+  --outline-var: #383d43;
+
+  --primary: #e6e8eb;
+  --on-primary: #1a1c1e;
+  --primary-container: #26303f;
+
+  --secondary: #4fd8ef;
+  --secondary-container: #08414d;
+  --on-secondary-container: #82e7fb;
+
+  --error: #ffb4ab;
+  --error-container: #8c0009;
+  --on-error-container: #ffdad6;
+
+  --stamp: #ff8a75;
+}
+/* 아이소메트릭 사무실은 밝게 그려져 있어 다크에선 살짝 눌러 눈부심을 줄인다 */
+:root[data-theme="dark"] #office { filter: brightness(0.82) saturate(0.92); }
+
 .material-symbols-outlined {
   font-family: "Material Symbols Outlined";
   font-weight: normal;
@@ -90,6 +121,22 @@ body {
   padding: 8px 8px 0;
   margin-bottom: 28px;
 }
+.brand .brandText { flex: 1; min-width: 0; }
+#themeToggle {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--outline-var);
+  border-radius: var(--r-lg);
+  background: var(--surface-lowest);
+  color: var(--on-surface-var);
+  cursor: pointer;
+}
+#themeToggle:hover { background: var(--surface-highest); color: var(--on-surface); }
+#themeToggle .material-symbols-outlined { font-size: 18px; }
 .brandMark {
   width: 40px;
   height: 40px;
@@ -841,7 +888,34 @@ header h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
 .log::-webkit-scrollbar-track { background: transparent; }
 .log::-webkit-scrollbar-thumb { background: var(--outline-var); border-radius: 10px; }
 
-.log .line { display: flex; flex-direction: column; gap: 4px; }
+.log .line { display: flex; flex-direction: column; gap: 4px; position: relative; }
+/* 말풍선 복사 버튼 — 줄에 마우스를 올리면 오른쪽 위에 뜬다 */
+.log .copyBtn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--outline-var);
+  border-radius: var(--r);
+  background: var(--surface-lowest);
+  color: var(--on-surface-var);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.log .line:hover .copyBtn,
+.log .copyBtn:focus-visible { opacity: 1; }
+.log .copyBtn:hover { background: var(--surface-highest); color: var(--on-surface); }
+.log .copyBtn .material-symbols-outlined { font-size: 15px; }
+.log .copyBtn.copied { color: var(--secondary); border-color: var(--secondary); opacity: 1; }
+/* 터치 기기엔 hover가 없으니 항상 옅게 보이게 */
+@media (hover: none) {
+  .log .copyBtn { opacity: 0.55; }
+}
 .log .who { font-size: 12px; font-weight: 600; color: var(--on-surface-var); }
 .log .body {
   background: var(--surface-low);
