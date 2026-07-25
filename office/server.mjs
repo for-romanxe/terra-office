@@ -1000,6 +1000,31 @@ async function runAgentQuery(dept, session, agentId, agent, prompt, mcpTools, ex
 }
 
 // 직원의 도구 목록 → SDK MCP 도구 + 허용할 내장 도구. 결재 게이트는 핸들러 안에서 처리한다.
+// 로컬 도구 하나를 SDK 도구로 감싼다 (결재 게이트·PM 봇 기록 포함). 직원과 실장이 함께 쓴다.
+function localSdkTool(dept, session, agentId, def) {
+  return sdkTool(def.name, def.description, zodShapeFrom(def.input_schema), async (input) => {
+    record(dept, session, { type: "tool", agent: agentId, name: def.name, input });
+    try {
+      if (GATED_TOOLS[def.name]) {
+        const approved = await requestConfirmation(dept, session, agentId, GATED_TOOLS[def.name](input));
+        if (!approved) {
+          return {
+            content: [{ type: "text", text: "사장님이 결재를 반려했습니다. 이 작업은 실행하지 않았습니다. 필요하면 대안을 제시하세요." }],
+          };
+        }
+      }
+      const result = runLocalTool(def.name, input);
+      if (def.name === "save_note" || def.name === "delete_note") notesChanged();
+      // PM 봇 알림창: 결재까지 통과해서 실제로 실행된 병합·푸시만 남긴다
+      if (def.name === "git_merge") logGit(dept, "merge", `MERGE: ${input.branch} → ${currentBranch(input.repo) || "현재 브랜치"}`);
+      if (def.name === "git_push") logGit(dept, "push", `PUSH: ${currentBranch(input.repo) || "현재 브랜치"} → 원격`);
+      return { content: [{ type: "text", text: String(result) }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: "오류: " + (err?.message || String(err)) }], isError: true };
+    }
+  });
+}
+
 function buildEmployeeTools(dept, session, agentId, emp) {
   const tools = [];
   const extraAllowed = [];
@@ -1009,36 +1034,19 @@ function buildEmployeeTools(dept, session, agentId, emp) {
       extraAllowed.push(def.builtin);
       continue;
     }
-    tools.push(
-      sdkTool(def.name, def.description, zodShapeFrom(def.input_schema), async (input) => {
-        record(dept, session, { type: "tool", agent: agentId, name: def.name, input });
-        try {
-          if (GATED_TOOLS[def.name]) {
-            const approved = await requestConfirmation(dept, session, agentId, GATED_TOOLS[def.name](input));
-            if (!approved) {
-              return {
-                content: [{ type: "text", text: "사장님이 결재를 반려했습니다. 이 작업은 실행하지 않았습니다. 필요하면 대안을 제시하세요." }],
-              };
-            }
-          }
-          const result = runLocalTool(def.name, input);
-          if (def.name === "save_note" || def.name === "delete_note") notesChanged();
-          // PM 봇 알림창: 결재까지 통과해서 실제로 실행된 병합·푸시만 남긴다
-          if (def.name === "git_merge") logGit(dept, "merge", `MERGE: ${input.branch} → ${currentBranch(input.repo) || "현재 브랜치"}`);
-          if (def.name === "git_push") logGit(dept, "push", `PUSH: ${currentBranch(input.repo) || "현재 브랜치"} → 원격`);
-          return { content: [{ type: "text", text: String(result) }] };
-        } catch (err) {
-          return { content: [{ type: "text", text: "오류: " + (err?.message || String(err)) }], isError: true };
-        }
-      })
-    );
+    tools.push(localSdkTool(dept, session, agentId, def));
   }
   return { tools, extraAllowed };
 }
 
-// 실장의 위임 도구: ask_<직원id> — 핸들러가 직원 업무를 통째로 돌리고 보고를 돌려준다
+// 실장의 위임 도구: ask_<직원id> — 핸들러가 직원 업무를 통째로 돌리고 보고를 돌려준다.
+// 여기에 read_file/list_files도 직접 쥐여준다 — 첨부 파일은 실장이 곧바로 읽을 수 있어야
+// 아무 직원에게나 위임했다가 "읽을 도구가 없다"고 막히는 일이 없다 (읽기 전용이라 안전).
 function buildChiefTools(dept, session) {
-  return Object.entries(dept.employees).map(([id, e]) =>
+  const chiefFileTools = ["read_file", "list_files"].map((n) =>
+    localSdkTool(dept, session, "chief", TOOL_REGISTRY[n])
+  );
+  return chiefFileTools.concat(Object.entries(dept.employees).map(([id, e]) =>
     sdkTool(
       `ask_${id}`,
       `${e.title} 직원에게 업무를 시킨다. 담당: ${e.duty}`,
@@ -1056,7 +1064,7 @@ function buildChiefTools(dept, session) {
         }
       }
     )
-  );
+  ));
 }
 
 // ── 결재 대기열: 파괴적 도구는 사장님이 승인해야 실행된다 ──────────
@@ -1334,7 +1342,8 @@ async function work(dept, session, text, name, files = null, rank = "") {
         .join("\n");
       prompt +=
         `${prompt ? "\n\n" : ""}[첨부 파일 ${fileList.length}개]\n${lines}\n` +
-        `read_file/list_files 도구를 가진 직원이 이 경로로 내용을 읽을 수 있다 (텍스트 파일만).`;
+        `너(실장)는 read_file/list_files 도구를 가지고 있으니 이 경로로 직접 내용을 읽을 수 있다 (텍스트 파일만). ` +
+        `내용 확인이 필요하면 직접 읽고, 전문 처리가 필요하면 담당 직원에게 경로와 함께 위임하라.`;
     }
     const answer = await runAgentQuery(dept, session, "chief", dept.chief, prompt, buildChiefTools(dept, session));
     record(dept, session, { type: "assistant", text: answer });
