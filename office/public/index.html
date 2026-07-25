@@ -29,6 +29,16 @@
       </button>
     </div>
 
+    <!-- 지금 접속 중인 팀원 (게임 로비처럼 실시간) -->
+    <section id="lobby" hidden aria-label="접속 중인 팀원">
+      <div class="lobbyHead">
+        <span class="lobbyDot"></span>
+        <span class="lobbyTitle">접속 중</span>
+        <span class="lobbyCount" id="lobbyCount">0</span>
+      </div>
+      <div id="lobbyList"></div>
+    </section>
+
     <nav id="tabs" aria-label="부서 선택"></nav>
 
     <!-- 관제실 — 전 부서를 한눈에 (사장 전용) -->
@@ -110,16 +120,13 @@
             </button>
           </div>
           <div id="logs" aria-live="polite"></div>
-          <div id="attachBar" hidden>
-            <span id="attachName"></span>
-            <button type="button" id="attachCancel" title="첨부 취소">✕</button>
-          </div>
+          <div id="attachBar" hidden></div>
           <form id="sayForm">
             <label for="sayInput" class="prompt">나&gt;</label>
             <input id="sayInput" type="text" autocomplete="off"
                    placeholder="지시 사항을 입력하세요" />
-            <input id="fileInput" type="file" hidden />
-            <button type="button" id="attachBtn" title="파일 첨부 (10MB 이하)">
+            <input id="fileInput" type="file" hidden multiple />
+            <button type="button" id="attachBtn" title="파일 첨부 (개당 10MB 이하, 최대 10개)">
               <span class="material-symbols-outlined">attach_file</span>
             </button>
             <button type="submit" id="sendBtn" title="전달">

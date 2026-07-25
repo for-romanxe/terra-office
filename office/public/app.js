@@ -737,6 +737,54 @@ delSessionBtn.addEventListener("click", async () => {
   }
 });
 
+// ── 접속 로비: 지금 들어와 있는 사람을 게임 로비처럼 실시간으로 ────
+const lobbyEl = document.getElementById("lobby");
+const lobbyListEl = document.getElementById("lobbyList");
+const lobbyCountEl = document.getElementById("lobbyCount");
+const RANK_ORDER = { 사장: 3, 이사: 2, 본부장: 1 };
+
+function renderLobby(people) {
+  if (!state.me) { lobbyEl.hidden = true; return; }
+  lobbyEl.hidden = false;
+  lobbyCountEl.textContent = people.length;
+  lobbyListEl.innerHTML = "";
+  for (const p of people) {
+    const row = document.createElement("div");
+    row.className = "lobbyMember" + (p.name === state.me.name ? " me" : "");
+
+    const av = document.createElement("span");
+    av.className = "lobbyAvatar rank-" + p.rank;
+    av.textContent = (p.name || "?").slice(0, 1);
+    // 접속 표시 — 초록 점이 아바타 위에서 맥동한다
+    const dot = document.createElement("span");
+    dot.className = "lobbyOnline";
+    av.appendChild(dot);
+    row.appendChild(av);
+
+    const mid = document.createElement("div");
+    mid.className = "lobbyMid";
+    const nm = document.createElement("span");
+    nm.className = "lobbyName";
+    nm.textContent = p.name + (p.name === state.me.name ? " (나)" : "");
+    mid.appendChild(nm);
+    const rk = document.createElement("span");
+    rk.className = "lobbyRank rank-" + p.rank;
+    rk.textContent = p.rank;
+    mid.appendChild(rk);
+    row.appendChild(mid);
+
+    // 한 사람이 탭 여러 개를 열어두면 그 수를 작게 표시
+    if (p.tabs > 1) {
+      const tabs = document.createElement("span");
+      tabs.className = "lobbyTabs";
+      tabs.title = `탭 ${p.tabs}개 열어둠`;
+      tabs.textContent = "×" + p.tabs;
+      row.appendChild(tabs);
+    }
+    lobbyListEl.appendChild(row);
+  }
+}
+
 // ── 관제실 ────────────────────────────────────────────────────
 // 규칙 판정은 서버가 하고(무료), "왜?"를 누를 때만 AI 진단을 부른다(구독 소모).
 const contentEl = document.getElementById("content");
@@ -955,7 +1003,7 @@ function scene(ev, job) {
 }
 
 // ── 메신저 로그 (부서·세션별) ──────────────────────────────────
-function addChat(deptId, sessionId, { who, rank, text, cls, color, file, trace, icon }) {
+function addChat(deptId, sessionId, { who, rank, text, cls, color, file, files, trace, icon }) {
   if (!DEPTS[deptId] || !sessionId) return;
   const log = ensureLog(deptId, sessionId).el;
   let div;
@@ -994,13 +1042,14 @@ function addChat(deptId, sessionId, { who, rank, text, cls, color, file, trace, 
     div.appendChild(body);
   }
 
-  if (file) {
-    // 첨부 파일: 누르면 다운로드된다
+  // 첨부 파일: files(배열) 또는 옛 file(단일) 둘 다 받는다. 누르면 다운로드된다
+  const fileList = files || (file ? [file] : []);
+  for (const f of fileList) {
     const a = document.createElement("a");
     a.className = "att";
-    a.href = file.url;
+    a.href = f.url;
     a.innerHTML = '<span class="material-symbols-outlined" style="font-size:13px">attach_file</span>';
-    a.appendChild(document.createTextNode(`${file.name} (${fmtSize(file.size)})`));
+    a.appendChild(document.createTextNode(`${f.name} (${fmtSize(f.size)})`));
     div.appendChild(a);
   }
   log.appendChild(div);
@@ -1160,7 +1209,7 @@ function chatFor(ev) {
   const M = DEPTS[ev.dept]?.meta || {};
   switch (ev.type) {
     case "user":
-      return { who: ev.name || "나", rank: ev.rank, text: ev.text, cls: "me", file: ev.file };
+      return { who: ev.name || "나", rank: ev.rank, text: ev.text, cls: "me", file: ev.file, files: ev.files };
     case "delegate": {
       const emp = M[ev.to];
       if (!emp) return null;
@@ -1278,6 +1327,7 @@ function handleEvent(ev) {
       state.me = ev.me || null;
       state.level = ev.me?.level || 0;
       showMe();
+      renderLobby(ev.presence || []);
       if (state.built) break;
       state.built = true;
       for (const d of ev.departments) {
@@ -1298,6 +1348,11 @@ function handleEvent(ev) {
         confirmMeta.set(c.id, { dept: c.dept, session: c.session, agent: c.agent });
         addConfirmCard(c);
       }
+      break;
+    }
+
+    case "presence": {
+      renderLobby(ev.people || []);
       break;
     }
 
@@ -1606,56 +1661,85 @@ document.getElementById("logoutBtn").addEventListener("click", () => {
 const attachBtn = document.getElementById("attachBtn");
 const fileInput = document.getElementById("fileInput");
 const attachBar = document.getElementById("attachBar");
-const attachNameEl = document.getElementById("attachName");
-const attachCancel = document.getElementById("attachCancel");
-let pendingFile = null;
+const MAX_FILES = 10;
+let pendingFiles = []; // 보내기 전 대기 중인 파일들
 
 function clearAttach() {
-  pendingFile = null;
+  pendingFiles = [];
   fileInput.value = "";
-  attachBar.hidden = true;
+  renderAttachBar();
+}
+function renderAttachBar() {
+  attachBar.innerHTML = "";
+  if (!pendingFiles.length) { attachBar.hidden = true; return; }
+  attachBar.hidden = false;
+  pendingFiles.forEach((f, i) => {
+    const chip = document.createElement("span");
+    chip.className = "attachChip";
+    const nm = document.createElement("span");
+    nm.className = "attachChipName";
+    nm.textContent = `📎 ${f.name} (${fmtSize(f.size)})`;
+    chip.appendChild(nm);
+    const x = document.createElement("button");
+    x.type = "button";
+    x.title = "이 파일 빼기";
+    x.textContent = "✕";
+    x.addEventListener("click", () => { pendingFiles.splice(i, 1); renderAttachBar(); });
+    chip.appendChild(x);
+    attachBar.appendChild(chip);
+  });
 }
 attachBtn.addEventListener("click", () => fileInput.click());
 fileInput.addEventListener("change", () => {
-  const f = fileInput.files[0];
-  if (!f) return;
-  if (f.size > 10 * 1024 * 1024) {
-    addChat(active, DEPTS[active]?.activeSession, { text: "⚠ 10MB 이하 파일만 올릴 수 있습니다.", cls: "err" });
-    fileInput.value = "";
-    return;
+  const sessionId = DEPTS[active]?.activeSession;
+  for (const f of fileInput.files) {
+    if (f.size > 10 * 1024 * 1024) {
+      addChat(active, sessionId, { text: `⚠ ${f.name} — 개당 10MB 이하만 올릴 수 있습니다.`, cls: "err" });
+      continue;
+    }
+    if (pendingFiles.length >= MAX_FILES) {
+      addChat(active, sessionId, { text: `⚠ 한 번에 최대 ${MAX_FILES}개까지 보낼 수 있습니다.`, cls: "err" });
+      break;
+    }
+    // 같은 파일을 두 번 고르면 한 번만 (이름·크기로 판단)
+    if (pendingFiles.some((p) => p.name === f.name && p.size === f.size)) continue;
+    pendingFiles.push(f);
   }
-  pendingFile = f;
-  attachNameEl.textContent = `📎 ${f.name} (${fmtSize(f.size)})`;
-  attachBar.hidden = false;
+  fileInput.value = ""; // 같은 파일을 다시 고를 수 있도록 비운다
+  renderAttachBar();
 });
-attachCancel.addEventListener("click", clearAttach);
 
 formEl.addEventListener("submit", async (e) => {
   e.preventDefault();
   enableAlerts(); // 답장 알림 준비 (권한은 크롬이 처음 한 번만 물어본다)
   const text = inputEl.value.trim();
-  if ((!text && !pendingFile) || !active) return;
+  if ((!text && !pendingFiles.length) || !active) return;
   const name = myName();
   const deptId = active;
   const sessionId = DEPTS[deptId].activeSession;
 
-  // 첨부가 있으면 먼저 서버에 올리고, 서버가 준 저장 정보를 지시와 함께 보낸다
-  let fileInfo = null;
-  if (pendingFile) {
+  // 첨부가 있으면 하나씩 서버에 올리고, 서버가 준 저장 정보들을 지시와 함께 보낸다
+  let fileInfos = [];
+  if (pendingFiles.length) {
     sendBtn.disabled = true;
-    const up = await fetch(
-      `/upload?dept=${encodeURIComponent(deptId)}&name=${encodeURIComponent(pendingFile.name)}`,
-      { method: "POST", body: pendingFile }
-    ).catch(() => null);
+    const results = await Promise.all(
+      pendingFiles.map((f) =>
+        fetch(`/upload?dept=${encodeURIComponent(deptId)}&name=${encodeURIComponent(f.name)}`,
+          { method: "POST", body: f })
+          .then((up) => (up.ok ? up.json() : null))
+          .catch(() => null)
+      )
+    );
     sendBtn.disabled = false;
-    if (!up || !up.ok) {
+    const failed = pendingFiles.filter((_, i) => !results[i]);
+    if (failed.length) {
       addChat(deptId, sessionId, {
-        text: "⚠ 파일 업로드 실패" + (up && up.status === 413 ? " — 10MB 이하만 올릴 수 있습니다." : ""),
+        text: `⚠ 파일 업로드 실패 (${failed.map((f) => f.name).join(", ")}) — 개당 10MB 이하만 올릴 수 있습니다.`,
         cls: "err",
       });
-      return;
+      return; // 하나라도 실패하면 보내지 않는다 (일부만 붙어 나가면 혼란스럽다)
     }
-    fileInfo = (await up.json()).file;
+    fileInfos = results.map((r) => r.file);
     clearAttach();
   }
 
@@ -1666,7 +1750,7 @@ formEl.addEventListener("submit", async (e) => {
   const res = await fetch("/say", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ dept: deptId, session: sessionId, text, name, file: fileInfo }),
+    body: JSON.stringify({ dept: deptId, session: sessionId, text, name, files: fileInfos }),
   }).catch(() => null);
   if (!res || !res.ok) {
     addChat(deptId, sessionId, {

@@ -1000,23 +1000,46 @@ header h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
 /* ── 입력줄 ──────────────────────────────────────────────── */
 #attachBar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 8px 12px;
   border-top: 1px solid var(--outline-var);
+}
+#attachBar[hidden] { display: none; }
+.attachChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 6px 4px 9px;
+  border: 1px solid var(--outline-var);
+  border-radius: 999px;
+  background: var(--surface-highest);
   font-size: 12px;
   color: var(--on-surface-var);
 }
-#attachBar[hidden] { display: none; }
-#attachCancel {
+.attachChip .attachChipName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.attachChip button {
+  flex-shrink: 0;
+  width: 16px; height: 16px;
+  display: flex; align-items: center; justify-content: center;
   background: none;
   border: none;
-  color: var(--error);
+  border-radius: 50%;
+  color: var(--outline);
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1;
 }
-#attachCancel:focus-visible { outline: 2px solid var(--error); }
+.attachChip button:hover { background: var(--error-container); color: var(--on-error-container); }
+.attachChip button:focus-visible { outline: 2px solid var(--error); }
 
 #sayForm {
   display: flex;
@@ -1387,3 +1410,84 @@ header h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
 }
 .opsItem .opsAsk:hover:not(:disabled) { background: var(--surface-highest); color: var(--on-surface); }
 .opsItem .opsAsk:disabled { opacity: 0.6; cursor: default; }
+
+/* ── 접속 로비 (게임 로비처럼 실시간 접속자) ──────────────────── */
+#lobby { margin-bottom: 18px; }
+.lobbyHead {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 4px 8px;
+}
+.lobbyHead .lobbyDot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #2fbf5f;
+  box-shadow: 0 0 0 0 rgba(47, 191, 95, 0.5);
+  animation: lobbyPulse 2s infinite;
+}
+.lobbyHead .lobbyTitle {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.02em;
+  color: var(--on-surface-var);
+}
+.lobbyHead .lobbyCount {
+  margin-left: auto;
+  min-width: 20px; padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-highest);
+  color: var(--on-surface-var);
+  font-size: 11px; font-weight: 700; text-align: center;
+}
+@keyframes lobbyPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(47, 191, 95, 0.5); }
+  70%  { box-shadow: 0 0 0 6px rgba(47, 191, 95, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(47, 191, 95, 0); }
+}
+
+.lobbyMember {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--r-lg);
+}
+.lobbyMember.me { background: var(--surface-highest); }
+
+.lobbyAvatar {
+  position: relative;
+  width: 30px; height: 30px; flex-shrink: 0;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700;
+  color: #fff;
+  background: var(--on-surface-var);
+}
+.lobbyAvatar.rank-사장   { background: var(--primary); }
+.lobbyAvatar.rank-이사   { background: var(--secondary); }
+.lobbyAvatar.rank-본부장 { background: #6a7b8c; }
+/* 아바타 오른쪽 아래 초록 접속 점 — 사이드바 배경색으로 테두리를 줘 떠 보이게 */
+.lobbyAvatar .lobbyOnline {
+  position: absolute; right: -1px; bottom: -1px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: #2fbf5f;
+  border: 2px solid var(--surface-c);
+}
+
+.lobbyMid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.lobbyName {
+  font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lobbyRank {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+  color: var(--outline);
+}
+.lobbyRank.rank-사장   { color: var(--primary); }
+.lobbyRank.rank-이사   { color: var(--secondary); }
+.lobbyTabs {
+  flex-shrink: 0;
+  font-size: 10px; font-weight: 700;
+  color: var(--outline);
+  font-family: var(--mono);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lobbyHead .lobbyDot { animation: none; }
+}

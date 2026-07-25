@@ -907,7 +907,27 @@ const UPLOAD_MAX = 10 * 1024 * 1024; // 10MB
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 // ── SSE 중계 ──────────────────────────────────────────────────
-const sseClients = new Set(); // { res, boss }
+const sseClients = new Set(); // { res, boss, member }
+
+// 지금 접속 중인 사람 명단. 한 사람이 탭 여러 개를 열어도 한 명으로 센다(id로 묶음).
+function presenceList() {
+  const by = new Map();
+  for (const c of sseClients) {
+    const m = c.member;
+    if (!m) continue; // 로그인 안 한 연결은 세지 않는다
+    // id로 묶되(같은 사람 여러 탭), 내부 id는 밖으로 내보내지 않는다 — 이름만 실어 보낸다
+    const cur = by.get(m.id) || { name: m.name, rank: m.rank, tabs: 0 };
+    cur.tabs++;
+    by.set(m.id, cur);
+  }
+  // 사장 > 이사 > 본부장 순으로 정렬
+  return [...by.values()].sort((a, b) => (RANKS[b.rank] || 0) - (RANKS[a.rank] || 0));
+}
+function broadcastPresence() {
+  const people = presenceList();
+  broadcast({ type: "presence", people });
+}
+
 function broadcast(event) {
   const tag = [event.dept, event.type, event.agent, event.name, event.to, event.from].filter(Boolean).join(" ");
   console.log(`[${new Date().toLocaleTimeString("en-GB", { hour12: false })}] ${tag}`);
@@ -1289,12 +1309,14 @@ async function runEmployee(dept, session, id, request) {
   return report || "(보고 내용 없음)";
 }
 
-async function work(dept, session, text, name, file = null, rank = "") {
+async function work(dept, session, text, name, files = null, rank = "") {
+  // 파일 하나만 넘겨도(구버전 호출) 배열로 감싼다
+  const fileList = Array.isArray(files) ? files : files ? [files] : [];
   dept.busy = true;
   dept.busySince = Date.now(); // 관제실이 "몇 분째 붙잡혀 있나"를 보려고 쓴다
   record(dept, session, {
     type: "user", text, name, rank,
-    ...(file ? { file: { name: file.name, url: file.url, size: file.size } } : {}),
+    ...(fileList.length ? { files: fileList.map((f) => ({ name: f.name, url: f.url, size: f.size })) } : {}),
   });
 
   try {
@@ -1306,9 +1328,12 @@ async function work(dept, session, text, name, file = null, rank = "") {
         `\n\n(발신자 직급: ${rank}. 회사 서열은 사장 > 이사 > 본부장 > AI 직원 순이며, ` +
         `${rank}님은 직원들의 상급자다. 지시는 그대로 따르되, 결재가 필요한 작업은 사장님 결재만 유효하다.)`;
     }
-    if (file) {
+    if (fileList.length) {
+      const lines = fileList
+        .map((f) => `- ${f.name} (${Math.max(1, Math.round(f.size / 1024))}KB) — 경로: ${f.path}`)
+        .join("\n");
       prompt +=
-        `${prompt ? "\n\n" : ""}[첨부 파일] ${file.name} (${Math.max(1, Math.round(file.size / 1024))}KB) — 경로: ${file.path}\n` +
+        `${prompt ? "\n\n" : ""}[첨부 파일 ${fileList.length}개]\n${lines}\n` +
         `read_file/list_files 도구를 가진 직원이 이 경로로 내용을 읽을 수 있다 (텍스트 파일만).`;
     }
     const answer = await runAgentQuery(dept, session, "chief", dept.chief, prompt, buildChiefTools(dept, session));
@@ -1384,11 +1409,16 @@ const server = http.createServer(async (req, res) => {
         owner: boss,
         me: me ? { name: me.name, rank: me.rank, level: RANKS[me.rank] || 0 } : null,
         pendingConfirms: pending,
+        presence: presenceList(),
       })}\n\n`
     );
-    const client = { res, boss };
+    const client = { res, boss, member: me };
     sseClients.add(client);
-    req.on("close", () => sseClients.delete(client));
+    if (me) broadcastPresence(); // 새로 들어온 사람을 모두에게 알린다
+    req.on("close", () => {
+      sseClients.delete(client);
+      if (client.member) broadcastPresence(); // 나간 사람도 반영한다
+    });
     return;
   }
 
@@ -1490,7 +1520,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/say") {
     let body = "";
     for await (const chunk of req) body += chunk;
-    let text = "", deptId = "", sessionId = "", create = false, name = "", fileRef = null;
+    let text = "", deptId = "", sessionId = "", create = false, name = "", fileRefs = [];
     try {
       const parsed = JSON.parse(body || "{}");
       text = String(parsed.text || "").trim();
@@ -1498,7 +1528,8 @@ const server = http.createServer(async (req, res) => {
       sessionId = String(parsed.session || "");
       create = Boolean(parsed.create);
       name = String(parsed.name || "").trim().slice(0, 20);
-      fileRef = parsed.file || null;
+      // files(배열) 우선, 없으면 옛 file(단일)도 받는다
+      fileRefs = Array.isArray(parsed.files) ? parsed.files : parsed.file ? [parsed.file] : [];
     } catch {}
     // 이름·직급은 명부에서 가져온다 (본문의 name은 못 믿는다).
     // 커밋 훅·PR 감시 같은 서버 내부 호출은 localhost라 사장으로 통과한다.
@@ -1528,19 +1559,20 @@ const server = http.createServer(async (req, res) => {
       }
     }
     // 첨부 파일: /upload가 돌려준 stored 값만 신뢰한다 (임의 경로 지정 차단)
-    let file = null;
-    if (fileRef && fileRef.stored) {
+    const files = [];
+    for (const fileRef of fileRefs.slice(0, 10)) { // 한 번에 최대 10개
+      if (!fileRef || !fileRef.stored) continue;
       const abs = path.resolve(UPLOADS_DIR, String(fileRef.stored));
       if (abs.startsWith(UPLOADS_DIR + path.sep) && fs.existsSync(abs) && fs.statSync(abs).isFile()) {
-        file = {
+        files.push({
           name: path.basename(abs).replace(/^[0-9a-f]{8}-/, ""),
           path: abs,
           url: "/uploads/" + String(fileRef.stored).split("/").map(encodeURIComponent).join("/"),
           size: fs.statSync(abs).size,
-        };
+        });
       }
     }
-    if ((!text && !file) || !dept || !session) {
+    if ((!text && !files.length) || !dept || !session) {
       res.writeHead(400, { "Content-Type": "application/json" }).end('{"error":"bad request"}');
       return;
     }
@@ -1550,7 +1582,7 @@ const server = http.createServer(async (req, res) => {
     }
     res.writeHead(200, { "Content-Type": "application/json" }).end('{"ok":true}');
     registerPrMember(dept, name);
-    work(dept, session, text, name, file, rank);
+    work(dept, session, text, name, files, rank);
     return;
   }
 
