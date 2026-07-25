@@ -19,7 +19,7 @@ const inputEl = document.getElementById("sayInput");
 const boardListEl = document.getElementById("boardList");
 const boardForm = document.getElementById("boardForm");
 const boardInput = document.getElementById("boardInput");
-const sendBtn = formEl.querySelector("button");
+const sendBtn = document.getElementById("sendBtn"); // 폼 첫 버튼은 📎라 id로 정확히 잡는다
 const workStateEl = document.getElementById("workState");
 const noteCountEl = document.getElementById("noteCount");
 const prBoardEl = document.getElementById("prBoard");
@@ -930,8 +930,12 @@ function refreshTabs() {
 
 function refreshBusyUI() {
   const busy = DEPTS[active]?.busy;
-  inputEl.disabled = !!busy;
+  // 업무 중이어도 입력은 열어둔다 — 미리 쳐놓을 수 있게. 전송(보내기)만 막는다.
+  inputEl.disabled = false;
   sendBtn.disabled = !!busy;
+  inputEl.placeholder = busy
+    ? "업무 중 — 미리 작성해두면 끝나는 대로 보낼 수 있어요"
+    : "지시 사항을 입력하세요";
   workStateEl.textContent = busy ? "● 업무중" : "○ 대기중";
   workStateEl.classList.toggle("on", !!busy);
   if (!busy) inputEl.focus();
@@ -1712,6 +1716,8 @@ fileInput.addEventListener("change", () => {
 formEl.addEventListener("submit", async (e) => {
   e.preventDefault();
   enableAlerts(); // 답장 알림 준비 (권한은 크롬이 처음 한 번만 물어본다)
+  // 업무 중이면 엔터를 눌러도 보내지 않는다 — 작성 중인 글은 그대로 둔다
+  if (DEPTS[active]?.busy) return;
   const text = inputEl.value.trim();
   if ((!text && !pendingFiles.length) || !active) return;
   const name = myName();
