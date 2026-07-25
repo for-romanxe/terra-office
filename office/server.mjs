@@ -236,10 +236,15 @@ const TOOL_REGISTRY = {
   },
   read_file: {
     name: "read_file",
-    description: "텍스트 파일 하나의 내용을 읽는다 (읽기 전용, 홈 폴더 안만).",
+    description:
+      "텍스트 파일 하나의 내용을 읽는다 (읽기 전용, 홈 폴더 안만). 한 번에 약 8천 자까지 반환하고, " +
+      "더 있으면 끝에 '이어읽기 offset=N'을 알려준다. 그 값을 offset으로 넘겨 다음 부분을 계속 읽을 수 있다.",
     input_schema: {
       type: "object",
-      properties: { path: { type: "string", description: "절대 경로 또는 ~/경로" } },
+      properties: {
+        path: { type: "string", description: "절대 경로 또는 ~/경로" },
+        offset: { type: "number", description: "이어읽기 시작 글자 위치 (기본 0). 앞서 받은 'offset=N' 값을 넣는다" },
+      },
       required: ["path"],
     },
   },
@@ -581,7 +586,19 @@ function runLocalTool(name, input) {
   }
   if (name === "read_file") {
     const file = resolveInHome(input.path);
-    return clip(fs.readFileSync(file, "utf8"), 8000);
+    const text = fs.readFileSync(file, "utf8");
+    const CHUNK = 8000;
+    const start = Math.max(0, Math.floor(Number(input.offset) || 0));
+    if (start >= text.length && text.length > 0) {
+      return `(offset ${start}은 파일 끝(${text.length}자)을 넘어섰습니다. 더 읽을 내용이 없습니다.)`;
+    }
+    const slice = text.slice(start, start + CHUNK);
+    const next = start + slice.length;
+    // 아직 뒤에 내용이 남았으면 다음 offset을 알려준다 — 조각내어 끝까지 읽을 수 있게
+    if (next < text.length) {
+      return slice + `\n\n…(여기까지 ${next}/${text.length}자. 이어읽기: offset=${next})`;
+    }
+    return slice || "(빈 파일)";
   }
 
   // 개발실: git
@@ -650,6 +667,15 @@ function runLocalTool(name, input) {
 }
 
 // ── 부서 로딩: departments/<부서>/실장.md + employees/*.md ────────
+// 모든 직원·실장에게 공통으로 붙는 태도 지침. 아첨(밀리면 소신 접기)을 막는다.
+const BACKBONE = `
+[일하는 태도 — 반드시 지킬 것]
+- 근거를 갖고 한 판단은 상대가 반발한다고 뒤집지 마라. 판단을 바꾸는 유일한 이유는 **새로운 사실이나 내 오류를 보여주는 반례**다. 상대가 언짢아하거나 "그게 맞아?"라고 되묻는 것은 근거가 아니다 — 그럴 땐 왜 그렇게 봤는지 근거를 다시, 차분히 설명하라.
+- "새 정보가 왔다"와 "그냥 압박이 왔다"를 구분하라. 전자면 기꺼이 고치고, 후자면 입장을 유지하라.
+- 반사적으로 사과하거나 비위를 맞추지 마라. "제가 과했던 것 같다", "역시 사장님 말씀이 맞다" 같은 말은 **실제로 내가 틀렸을 때만** 한다. 틀렸으면 짧고 분명하게 인정하고 고쳐라. 맞으면 굽히지 말고 근거를 대라.
+- 상대를 기분 좋게 하는 것보다 **믿을 수 있는 판단을 주는 것**이 네 일이다. 맞장구치는 직원보다 바른말 하는 직원이 쓸모 있다.
+- 단, 고집이 아니라 근거다. 정말 틀렸으면 버티지 말고 인정하라.`;
+
 function parseAgentFile(file) {
   const raw = fs.readFileSync(file, "utf8");
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
@@ -686,7 +712,7 @@ function loadDepartment(dirName) {
       title: def.name,
       color: def.color || "#5a5a6a",
       duty: def.duty || "",
-      system: def.system,
+      system: def.system + "\n" + BACKBONE,
       toolNames,
       model: def.model || MODEL, // md에서 model: claude-haiku-4-5 등으로 조절 가능
     };
@@ -699,7 +725,8 @@ function loadDepartment(dirName) {
     system:
       chiefDef.system +
       "\n\n현재 팀원:\n" +
-      Object.values(employees).map((e) => `- ${e.title}: ${e.duty}`).join("\n"),
+      Object.values(employees).map((e) => `- ${e.title}: ${e.duty}`).join("\n") +
+      "\n" + BACKBONE,
   };
 
   return {
