@@ -248,6 +248,35 @@ const TOOL_REGISTRY = {
       required: ["path"],
     },
   },
+  write_file: {
+    name: "write_file",
+    description:
+      "텍스트 파일을 새로 만들거나 통째로 덮어쓴다 (홈 폴더 안만). 호출하면 시스템이 사장님에게 결재 카드를 띄우고, " +
+      "승인될 때만 실제로 쓰인다. 기존 파일의 일부만 고칠 때는 write_file로 통째로 다시 쓰지 말고 edit_file을 써라.",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "절대 경로 또는 ~/경로" },
+        content: { type: "string", description: "파일에 쓸 전체 내용" },
+      },
+      required: ["path", "content"],
+    },
+  },
+  edit_file: {
+    name: "edit_file",
+    description:
+      "기존 텍스트 파일에서 old를 new로 바꾼다 (홈 폴더 안만). old는 파일에 정확히 한 번만 나와야 한다 — " +
+      "여러 번 나오면 앞뒤를 더 붙여 유일하게 지정하라. 호출하면 시스템이 사장님에게 결재 카드를 띄우고, 승인될 때만 실제로 바뀐다.",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "절대 경로 또는 ~/경로" },
+        old: { type: "string", description: "바꿀 기존 문자열 (파일에 정확히 한 번 나와야 함)" },
+        new: { type: "string", description: "새로 넣을 문자열" },
+      },
+      required: ["path", "old", "new"],
+    },
+  },
 
   // 개발실: git
   git_status: {
@@ -401,6 +430,13 @@ function currentBranch(repo) {
 const GATED_TOOLS = {
   delete_note: (input) => `보관 메모 삭제 (${input?.title})`,
   archive_delete_scrap: (input) => `공고 스크랩 삭제 (id: ${input?.id})`,
+  // 파일 쓰기·편집은 되돌리기 어렵다 — 어느 파일에 무엇이 들어가는지 카드에 보여주고 결재를 받는다
+  write_file: (input) => {
+    const c = String(input?.content ?? "");
+    return `파일 쓰기(새로 만들기·덮어쓰기): ${input?.path}  (${Buffer.byteLength(c)} 바이트)\n─ 내용 미리보기 ─\n${clip(c, 500)}`;
+  },
+  edit_file: (input) =>
+    `파일 편집: ${input?.path}\n─ 바꿀 것 ─\n${clip(String(input?.old ?? ""), 300)}\n─ 새 내용 ─\n${clip(String(input?.new ?? ""), 300)}`,
   // 어디"로" 들어가는지가 빠지면 엉뚱한 브랜치에 병합돼도 승인자가 알아챌 수 없다
   git_merge: (input) => {
     const into = currentBranch(input?.repo);
@@ -599,6 +635,27 @@ function runLocalTool(name, input) {
       return slice + `\n\n…(여기까지 ${next}/${text.length}자. 이어읽기: offset=${next})`;
     }
     return slice || "(빈 파일)";
+  }
+  if (name === "write_file") {
+    const file = resolveInHome(input.path);
+    const content = String(input.content ?? "");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, content, "utf8");
+    return `저장 완료: ${file} (${Buffer.byteLength(content)} 바이트)`;
+  }
+  if (name === "edit_file") {
+    const file = resolveInHome(input.path);
+    const text = fs.readFileSync(file, "utf8");
+    const oldStr = String(input.old ?? "");
+    if (!oldStr) throw new Error("바꿀 문자열(old)이 비어 있습니다.");
+    const idx = text.indexOf(oldStr);
+    if (idx === -1) throw new Error("바꿀 문자열을 파일에서 찾지 못했습니다.");
+    if (text.indexOf(oldStr, idx + oldStr.length) !== -1) {
+      throw new Error("바꿀 문자열이 파일에 여러 번 나옵니다 — 앞뒤를 더 붙여 유일하게 지정하세요.");
+    }
+    const newStr = String(input.new ?? "");
+    fs.writeFileSync(file, text.slice(0, idx) + newStr + text.slice(idx + oldStr.length), "utf8");
+    return `편집 완료: ${file} (${oldStr.length}자 → ${newStr.length}자)`;
   }
 
   // 개발실: git
@@ -1176,11 +1233,19 @@ function localSdkTool(dept, session, agentId, def) {
 // md의 tools에 없어도 자동으로 붙는다. 새로 개설한 프로젝트 방 직원까지 커버된다.
 // 읽기 전용만 담는다 — 쓰기(git_push·git_merge·delete_note 등)는 담당 직원 md에서만 준다.
 const BASE_ACCESS_TOOLS = ["web_fetch", "web_search", "gh_pr_list", "gh_pr_view", "gh_pr_diff"];
+// 파일 편집 도구 — 점검관을 뺀 모든 직원에게 기본 지급한다. 실제 쓰기는 사장 결재를 거친다(GATED_TOOLS).
+// 점검관(*_inspector)은 읽기 전용을 유지한다 — 고칠 수단이 없어야 리뷰가 오염되지 않는다.
+const BASE_EDIT_TOOLS = ["write_file", "edit_file"];
 
 function buildEmployeeTools(dept, session, agentId, emp) {
   const tools = [];
   const extraAllowed = [];
-  for (const name of [...new Set([...emp.toolNames, ...BASE_ACCESS_TOOLS])]) {
+  const isInspector = String(agentId).endsWith("_inspector");
+  const base = isInspector ? BASE_ACCESS_TOOLS : [...BASE_ACCESS_TOOLS, ...BASE_EDIT_TOOLS];
+  let names = [...new Set([...emp.toolNames, ...base])];
+  // 점검관은 md에 write/edit가 적혀 있어도 읽기 전용을 강제한다
+  if (isInspector) names = names.filter((n) => !BASE_EDIT_TOOLS.includes(n));
+  for (const name of names) {
     const def = TOOL_REGISTRY[name];
     if (def.builtin) {
       extraAllowed.push(def.builtin);

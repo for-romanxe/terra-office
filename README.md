@@ -92,7 +92,11 @@ duty: 명패에 뜨는 한 줄 소개
 
 실장.md만 쓰는 키: `theme`(방 팔레트), `private: true`(사장 전용 부서), `prboard: true`(PR 집계판 + PM 봇 패널), `project: true`(UI에서 만든 프로젝트 방 표시 — 사장이 지울 수 있음).
 
-**기본 지급 도구(읽기 전용).** 모든 팀원에게 `tools`와 무관하게 웹·깃허브 읽기 도구가 자동으로 붙는다 — `web_search`·`web_fetch`(공개 웹·검색)와 `gh_pr_list`·`gh_pr_view`·`gh_pr_diff`(gh 인증을 타고 비공개 저장소·PR 읽기). 새로 개설한 프로젝트 방 직원까지 적용된다(`BASE_ACCESS_TOOLS`). 읽기만 지급하며, 쓰기(`git_push`·`git_merge`·PR 코멘트·승인 등)는 여전히 담당 직원 md에서 명시할 때만 준다.
+**기본 지급 도구.** 모든 팀원에게 `tools`와 무관하게 다음이 자동으로 붙는다.
+- **읽기(`BASE_ACCESS_TOOLS`)** — `web_search`·`web_fetch`(공개 웹·검색), `gh_pr_list`·`gh_pr_view`·`gh_pr_diff`(gh 인증을 타고 비공개 저장소·PR 읽기).
+- **편집(`BASE_EDIT_TOOLS`)** — `write_file`(새로 만들기·덮어쓰기)·`edit_file`(부분 치환). **점검관(`*_inspector`)은 제외** — 고칠 수단이 없어야 리뷰가 오염되지 않는다. 편집은 홈 폴더 안·민감 경로 차단(`resolveInHome`)을 그대로 타고, **실제 쓰기는 사장 결재를 거친다**(`GATED_TOOLS`) — 카드에 경로와 내용 미리보기가 뜬다.
+
+새로 개설한 프로젝트 방 직원까지 자동 적용된다. `git_push`·`git_merge`·PR 코멘트·승인 등 그 밖의 쓰기는 여전히 담당 직원 md에서 명시할 때만 준다.
 
 ### 프로젝트 방 (개설·삭제)
 
