@@ -738,6 +738,9 @@ function loadDepartment(dirName) {
     private: /^(true|yes|1)$/i.test(chiefDef.private || ""),
     // prboard: true면 부서 상단에 팀원별 PR 집계(스코어보드)를 띄운다
     prBoard: /^(true|yes|1)$/i.test(chiefDef.prboard || ""),
+    // project: true면 "새 프로젝트 방" 기능으로 만든 방 — 사장이 UI에서 지울 수 있다.
+    // 기본 방(개발실·비서실·물커톤실)에는 이 표시가 없어 삭제되지 않는다.
+    project: /^(true|yes|1)$/i.test(chiefDef.project || ""),
     chief,
     employees,
     busy: false,
@@ -833,7 +836,8 @@ function createSession(dept, title) {
   saveSession(dept, s);
   return s;
 }
-for (const dept of Object.values(DEPARTMENTS)) {
+// 부서의 저장된 세션들을 디스크에서 복원한다. 없으면 기본 세션 하나를 만든다.
+function loadSessions(dept) {
   const dir = path.join(SESS_DIR, dept.id);
   fs.mkdirSync(dir, { recursive: true });
   dept.sessions = {};
@@ -844,6 +848,122 @@ for (const dept of Object.values(DEPARTMENTS)) {
     } catch {}
   }
   if (!Object.keys(dept.sessions).length) createSession(dept, "기본 업무");
+}
+for (const dept of Object.values(DEPARTMENTS)) loadSessions(dept);
+
+// 폴더를 새로 읽어 DEPARTMENTS에 등록한다 (새 방 개설 때 서버 재시작 없이 반영).
+function registerDepartment(dir) {
+  const dept = loadDepartment(dir);
+  loadSessions(dept);
+  DEPARTMENTS[dept.id] = dept;
+  return dept;
+}
+
+// ── 새 프로젝트 방 템플릿 ──────────────────────────────────────
+// 물커톤실을 일반 프로젝트용으로 일반화한 방(실장 + 전략·코드점검·통합).
+// 방 이름을 폴더명 겸 표시명으로 쓰고, 실장 색만 팔레트에서 돌려 방마다 조금씩 구분한다.
+const ROOM_COLORS = ["#2f5a7a", "#7a4a2f", "#4a2f7a", "#2f7a4a", "#7a2f5a", "#5a5a2f"];
+
+function makeRoomFiles(name, order) {
+  const base = name.replace(/실$/, ""); // 문장 안에서 쓸 어간: "쌤노트실" → "쌤노트"
+  const note = `${base}-프로젝트정보`;
+  const color = ROOM_COLORS[(order - 1) % ROOM_COLORS.length];
+  const dir = path.join(__dirname, "departments", name);
+  fs.mkdirSync(path.join(dir, "employees"), { recursive: true });
+
+  fs.writeFileSync(path.join(dir, "실장.md"), `---
+order: ${order}
+id: chief
+name: ${base} 실장
+color: "${color}"
+theme: lab
+prboard: true
+project: true
+---
+
+너는 ${base} 실장이다. "${base}" 프로젝트만 전담하는 연구실을 이끈다. 사용자의 지시를 접수해 팀원에게 위임하고, 결과를 취합해 간결하게 보고한다. 한국어, 서너 문장 이내.
+- 프로젝트 정보(목표·범위·저장소 주소·현재 진행 상황)는 노트 "${note}"가 기준 문서다. 지시를 받으면 필요할 때 이 노트를 먼저 확인하게 하라. 노트가 없거나 항목이 비어 있으면 아는 척하지 말고 사용자에게 물어본 뒤, 전략 담당에게 노트로 기록시켜라.
+- 모든 git·파일 작업에는 대상 경로가 필요하다. 사용자가 폴더명만 말하면 /Users/for_romanxe/ 아래 경로로 해석해서 팀원에게 전달한다. 어느 저장소인지 불분명하면 먼저 물어본다.
+- 점검관은 "발견"만 하고 수정하지 않는 것이 원칙이다. 점검 결과를 보고할 때 발견 항목을 임의로 누락하지 마라.
+- 커밋 전에는 코드 점검관에게 변경사항 점검을 먼저 시키는 것이 원칙이다. 치명 항목이 있으면 커밋을 진행하지 말고 사용자에게 알려라.
+- 팀 협업은 "사무실 PR" 방식이 기본이다: 팀원은 깃허브에 push만 하면 되고, 서버가 브랜치 push를 감지해 자동 접수한다. 점검은 코드 점검관(git_fetch → git_diff로 main과 비교), 병합은 통합담당(git_fetch → main에서 origin/브랜치명 병합 → push, 결재 필요). 점검 통과 후에도 병합은 별도 지시가 있을 때만 한다.
+- 깃허브에 올라온 PR 점검도 가능하다: 코드 점검관에게 gh_pr_view로 충돌 여부(mergeable)를, gh_pr_diff로 변경사항을 점검시켜라. PR을 GitHub에서 직접 만들거나 머지 버튼을 누르는 것은 불가능하다.
+`);
+
+  fs.writeFileSync(path.join(dir, "employees", "전략담당.md"), `---
+order: 1
+id: strategist
+name: 전략 담당
+color: "#2f7a6a"
+tools: save_note, list_notes, read_note, delete_note, web_search, web_fetch, list_files, read_file
+duty: 프로젝트 정보를 노트로 관리하고(삭제는 사장님 결재 필요), 기획·리서치·우선순위를 문서로 굳힌다
+---
+
+너는 ${base}실의 전략 담당이다. 프로젝트가 "뭘, 왜, 어디까지" 만들지를 문서로 굳히는 일을 한다. 한국어로 답한다.
+- 프로젝트 정보(목표·범위·저장소·일정)는 노트 "${note}" 하나로 관리한다. 새 정보를 들으면 이 노트를 갱신하고, 모르는 항목은 "미정"으로 남겨라. 지어내지 마라.
+- 기획 문서는 규모에 맞게 압축한다: PRD는 한 페이지(문제→대상→핵심 기능→안 만드는 것), 우선순위는 "지금 꼭 필요한가"를 기준으로 자른다.
+- 리서치를 시키면 web_search로 유사 사례·기존 서비스를 찾아 "우리와 뭐가 다른가"까지 정리한다.
+- 만든 문서는 save_note로 저장하고 노트 제목을 보고에 밝힌다. 점검관·통합 담당이 이 노트를 기준 문서로 쓴다.
+- 노트 삭제는 delete_note로 한다. 호출하면 시스템이 사장님에게 결재 카드를 띄우니, 승인 여부를 네가 미리 판단해 보류하지 마라.
+`);
+
+  fs.writeFileSync(path.join(dir, "employees", "코드점검관.md"), `---
+order: 2
+id: code_inspector
+name: 코드 점검관
+color: "#3a5a8a"
+tools: git_status, git_diff, git_fetch, git_log, list_files, read_file, gh_pr_list, gh_pr_view, gh_pr_diff
+duty: 코드·팀원 브랜치·깃허브 PR의 버그·보안·예외처리 문제를 찾아 보고한다 (브랜치는 git_fetch 후 git_diff로, PR은 gh_pr_view·gh_pr_diff로 점검, 읽기 전용, 수정 불가)
+---
+
+너는 ${base}실의 코드 점검관이다. 역할은 코드를 "고치는 것"이 아니라 "문제를 찾아내는 것"이다. 너에게는 읽기 도구만 있다. 발견만 하고 실장에게 보고하라. 한국어로 답한다.
+- 경로 규칙: path·repo 인자는 절대 경로. 폴더명만 받으면 /Users/for_romanxe/ 아래로 해석한다.
+- 크래시·무한루프·널 참조·API 키 하드코딩·예외 없는 외부 호출 같은 "실제로 터지는" 문제를 최우선으로 잡아라.
+- 발견 항목은 치명/경고/사소로 나눠 보고하고, 치명이 없으면 "커밋해도 됨"(또는 브랜치 점검이면 "머지해도 됨")을 명시한다.
+- 팀원이 push한 브랜치를 점검할 때: git_fetch로 최신 상태를 받고, git_diff에 target: origin/브랜치명을 줘서 main과의 차이를 본다. 파일별 상세는 file 인자로 하나씩 확인한다.
+`);
+
+  fs.writeFileSync(path.join(dir, "employees", "통합담당.md"), `---
+order: 3
+id: integrator
+name: 통합 담당
+model: claude-haiku-4-5
+color: "#6a5a8a"
+tools: git_commit, git_branch, git_fetch, git_merge, git_push, list_files, read_file
+duty: 저장소의 커밋·브랜치·병합·푸시를 수행한다 (팀원 브랜치는 git_fetch 후 origin/브랜치명으로 병합, 병합·푸시는 사장님 결재 필요)
+---
+
+너는 ${base}실의 통합 담당이다. git 커밋, 브랜치 관리, 병합, 푸시를 수행하고 결과를 간결하게 보고한다. 한국어로 답한다.
+- repo 인자는 절대 경로다. 폴더명만 받으면 /Users/for_romanxe/ 아래로 해석한다.
+- 커밋 메시지는 변경 내용이 드러나게 구체적으로 쓴다.
+- 여럿이 같은 저장소를 만질 수 있다. 병합 전에 충돌 여부를 먼저 확인하고, 충돌이 있으면 임의로 풀지 말고 실장에게 보고하라.
+- 팀원이 push한 브랜치를 병합할 때는 git_fetch로 최신 상태를 받은 뒤, git_branch로 main에 반드시 먼저 이동하고 origin/브랜치명을 병합한다.
+- git_merge는 "현재 브랜치"로 합친다. 저장소가 어느 브랜치에 서 있는지 모르면 git_status로 확인부터 하라. main이 아닌 곳에 서 있는 채로 병합하면 엉뚱한 브랜치가 오염된다. 이동을 건너뛰지 마라.
+`);
+}
+
+// 부서 하나를 클라이언트로 내려보내는 형태로 직렬화한다 (hello / dept_created 공용).
+function departmentDTO(d) {
+  return {
+    id: d.id,
+    name: d.name,
+    busy: d.busy,
+    theme: d.theme,
+    prBoard: d.prBoard,
+    project: d.project,
+    prStats: readPrStats()[d.id] || {},
+    gitLog: readGitLog()[d.id] || [],
+    gitRepo: readJson(WATCH_FILE, []).find((w) => w?.dept === d.id)?.repo || "",
+    sessions: Object.values(d.sessions)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map((s) => ({ id: s.id, title: s.title, createdAt: s.createdAt })),
+    roster: {
+      chief: { name: d.chief.title, color: d.chief.color, model: modelLabel(d.chief.model) },
+      employees: Object.entries(d.employees).map(([id, e]) => ({
+        id, name: e.title, color: e.color, duty: e.duty, model: modelLabel(e.model),
+      })),
+    },
+  };
 }
 
 // ── 부서 게시판: 팀원끼리 직접 쓰는 공유 메모 (직원 호출 없음) ────
@@ -1052,10 +1172,15 @@ function localSdkTool(dept, session, agentId, def) {
   });
 }
 
+// 모든 직원에게 기본으로 쥐여주는 "접근" 도구 — 웹 열람과 깃허브(인증) 읽기.
+// md의 tools에 없어도 자동으로 붙는다. 새로 개설한 프로젝트 방 직원까지 커버된다.
+// 읽기 전용만 담는다 — 쓰기(git_push·git_merge·delete_note 등)는 담당 직원 md에서만 준다.
+const BASE_ACCESS_TOOLS = ["web_fetch", "web_search", "gh_pr_list", "gh_pr_view", "gh_pr_diff"];
+
 function buildEmployeeTools(dept, session, agentId, emp) {
   const tools = [];
   const extraAllowed = [];
-  for (const name of emp.toolNames) {
+  for (const name of [...new Set([...emp.toolNames, ...BASE_ACCESS_TOOLS])]) {
     const def = TOOL_REGISTRY[name];
     if (def.builtin) {
       extraAllowed.push(def.builtin);
@@ -1413,25 +1538,7 @@ const server = http.createServer(async (req, res) => {
     const departments = Object.values(DEPARTMENTS)
       .filter((d) => !(d.private && !boss)) // 비공개 부서(비서실)는 사장만
       .sort((a, b) => a.order - b.order)
-      .map((d) => ({
-        id: d.id,
-        name: d.name,
-        busy: d.busy,
-        theme: d.theme,
-        prBoard: d.prBoard,
-        prStats: readPrStats()[d.id] || {},
-        gitLog: readGitLog()[d.id] || [],
-        gitRepo: readJson(WATCH_FILE, []).find((w) => w?.dept === d.id)?.repo || "",
-        sessions: Object.values(d.sessions)
-          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-          .map((s) => ({ id: s.id, title: s.title, createdAt: s.createdAt })),
-        roster: {
-          chief: { name: d.chief.title, color: d.chief.color, model: modelLabel(d.chief.model) },
-          employees: Object.entries(d.employees).map(([id, e]) => ({
-            id, name: e.title, color: e.color, duty: e.duty, model: modelLabel(e.model),
-          })),
-        },
-      }));
+      .map(departmentDTO);
     // 아직 안 끝난 결재를 함께 내려보낸다 — 새로고침해도 승인 버튼이 사라지지 않도록.
     // 비공개 부서(비서실)의 결재는 사장에게만 보인다.
     const pending = [...pendingConfirms.values()]
@@ -1754,6 +1861,91 @@ const server = http.createServer(async (req, res) => {
         session: { id: fresh.id, title: fresh.title, createdAt: fresh.createdAt },
       });
     }
+    res.writeHead(200, { "Content-Type": "application/json" }).end('{"ok":true}');
+    return;
+  }
+
+  // ── 프로젝트 방 개설 (사장 전용) ─────────────────────────────
+  // 물커톤실을 일반화한 방을 폴더+md로 만들고 재시작 없이 등록한다.
+  if (req.method === "POST" && url.pathname === "/dept/create") {
+    if (!isBoss(req)) {
+      res.writeHead(403, { "Content-Type": "application/json" }).end('{"error":"boss only"}');
+      return;
+    }
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    let name = "";
+    try { name = String(JSON.parse(body || "{}").name || "").trim(); } catch {}
+    // 폴더명 겸 표시명. 경로 조작·중복을 막는다.
+    if (!/^[가-힣a-zA-Z0-9 ]{1,20}$/.test(name)) {
+      res.writeHead(400, { "Content-Type": "application/json" })
+        .end('{"error":"방 이름은 한글·영문·숫자·공백 1~20자만 됩니다."}');
+      return;
+    }
+    if (DEPARTMENTS[name] || fs.existsSync(path.join(__dirname, "departments", name))) {
+      res.writeHead(409, { "Content-Type": "application/json" })
+        .end('{"error":"같은 이름의 방이 이미 있습니다."}');
+      return;
+    }
+    const order = Math.max(0, ...Object.values(DEPARTMENTS).map((d) => d.order)) + 1;
+    try {
+      makeRoomFiles(name, order);
+      const dept = registerDepartment(name);
+      broadcast({ type: "dept_created", department: departmentDTO(dept) });
+      console.log(`부서 개설(신규): ${dept.name} — 실장 + 직원 ${Object.keys(dept.employees).length}명`);
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ id: dept.id }));
+    } catch (err) {
+      // 절반만 만들어진 폴더가 남지 않도록 되돌린다
+      fs.rmSync(path.join(__dirname, "departments", name), { recursive: true, force: true });
+      delete DEPARTMENTS[name];
+      res.writeHead(500, { "Content-Type": "application/json" })
+        .end(JSON.stringify({ error: String(err?.message || err).slice(0, 300) }));
+    }
+    return;
+  }
+
+  // ── 프로젝트 방 삭제 (사장 전용) ─────────────────────────────
+  // 이 기능으로 만든 방(project:true)만 지운다. 기본 방은 보호된다.
+  if (req.method === "POST" && url.pathname === "/dept/delete") {
+    if (!isBoss(req)) {
+      res.writeHead(403, { "Content-Type": "application/json" }).end('{"error":"boss only"}');
+      return;
+    }
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    let deptId = "";
+    try { deptId = String(JSON.parse(body || "{}").dept || ""); } catch {}
+    const dept = DEPARTMENTS[deptId];
+    if (!dept) {
+      res.writeHead(404, { "Content-Type": "application/json" }).end('{"error":"not found"}');
+      return;
+    }
+    if (!dept.project) {
+      res.writeHead(403, { "Content-Type": "application/json" })
+        .end('{"error":"기본 방은 삭제할 수 없습니다."}');
+      return;
+    }
+    if (dept.busy) {
+      res.writeHead(409, { "Content-Type": "application/json" }).end('{"error":"busy"}');
+      return;
+    }
+    delete DEPARTMENTS[deptId];
+    // 방 자체와 그에 딸린 기록을 함께 정리한다
+    fs.rmSync(path.join(__dirname, "departments", deptId), { recursive: true, force: true });
+    fs.rmSync(path.join(SESS_DIR, deptId), { recursive: true, force: true });
+    fs.rmSync(path.join(BOARDS_DIR, deptId + ".json"), { force: true });
+    for (const [file, key] of [[PR_STATS_FILE, "prStats"], [GIT_LOG_FILE, "gitLog"]]) {
+      const obj = readJson(file, {});
+      if (obj[deptId]) { delete obj[deptId]; fs.writeFileSync(file, JSON.stringify(obj, null, 2)); }
+    }
+    const watch = readJson(WATCH_FILE, []).filter((w) => w?.dept !== deptId);
+    fs.writeFileSync(WATCH_FILE, JSON.stringify(watch, null, 2));
+    // 남아 있던 이 방의 결재 카드도 치운다 (업무 중이면 위에서 막았으니 보통은 비어 있다)
+    for (const [cid, p] of pendingConfirms) {
+      if (p.event?.dept === deptId) pendingConfirms.delete(cid);
+    }
+    broadcast({ type: "dept_deleted", dept: deptId });
+    console.log(`부서 삭제: ${deptId}`);
     res.writeHead(200, { "Content-Type": "application/json" }).end('{"ok":true}');
     return;
   }

@@ -21,6 +21,7 @@ const boardForm = document.getElementById("boardForm");
 const boardInput = document.getElementById("boardInput");
 const sendBtn = document.getElementById("sendBtn"); // 폼 첫 버튼은 📎라 id로 정확히 잡는다
 const workStateEl = document.getElementById("workState");
+const deptDeleteBtn = document.getElementById("deptDeleteBtn");
 const noteCountEl = document.getElementById("noteCount");
 const prBoardEl = document.getElementById("prBoard");
 const pmBotEl = document.getElementById("pmBot");
@@ -151,6 +152,8 @@ function switchDept(id) {
   renderPmBot();
   refreshTabs();
   refreshBusyUI();
+  // 방 삭제 버튼은 사장이 볼 때, 그리고 이 기능으로 만든 프로젝트 방에서만
+  deptDeleteBtn.hidden = !(state.level >= 3 && dept.project);
 }
 
 // ── 사진 위 직원 마커 ────────────────────────────────────────
@@ -737,6 +740,53 @@ delSessionBtn.addEventListener("click", async () => {
   }
 });
 
+// ── 프로젝트 방 개설·삭제 (사장 전용) ────────────────────────
+// 물커톤실과 같은 구조(실장 + 전략·코드점검·통합)의 방을 이름만 정해 만든다.
+function openRoomModal() {
+  const name = window.prompt(
+    "새 프로젝트 방 이름을 입력하세요 (예: 쌤노트실).\n한글·영문·숫자·공백 1~20자."
+  );
+  if (name == null) return;
+  createRoom(name.trim());
+}
+
+async function createRoom(name) {
+  if (!name) return;
+  state.wantSwitchNext = true; // 개설 성공 시 그 방으로 바로 이동
+  const res = await fetch("/dept/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    state.wantSwitchNext = false;
+    let msg = "개설 실패 — 서버에 연결하지 못했습니다.";
+    if (res) { try { msg = (await res.json()).error || "개설 실패"; } catch { msg = "개설 실패"; } }
+    window.alert(msg);
+  }
+  // 성공 시 SSE dept_created가 방을 심고 탭을 갱신한다.
+}
+
+deptDeleteBtn.addEventListener("click", async () => {
+  const d = DEPTS[active];
+  if (!d || !d.project) return;
+  const ok = window.confirm(
+    `「${d.name}」 방을 삭제할까요?\n이 방의 세션·대화·게시판·PR 기록이 모두 사라지며 복구할 수 없습니다.`
+  );
+  if (!ok) return;
+  const res = await fetch("/dept/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dept: active }),
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    let msg = "삭제 실패 — 방이 일하는 중이면 끝난 뒤 다시 시도하세요.";
+    if (res) { try { msg = (await res.json()).error || msg; } catch {} }
+    window.alert(msg);
+  }
+  // 성공 시 SSE dept_deleted가 정리한다.
+});
+
 // ── 접속 로비: 지금 들어와 있는 사람을 게임 로비처럼 실시간으로 ────
 const lobbyEl = document.getElementById("lobby");
 const lobbyListEl = document.getElementById("lobbyList");
@@ -828,69 +878,179 @@ async function loadOps(render = true) {
   if (render && opsOpen) renderOps(checks, at);
 }
 
-function renderOps(checks, at) {
-  opsAtEl.textContent = at ? `점검 ${new Date(at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "";
-  opsList.innerHTML = "";
-  for (const c of checks) {
-    const row = document.createElement("div");
-    row.className = "opsItem " + c.level;
+// 문제부터 위로: 이상 → 주의 → 정상
+const LEVEL_RANK = { bad: 0, warn: 1, ok: 2 };
+const byLevel = (a, b) => (LEVEL_RANK[a.level] ?? 3) - (LEVEL_RANK[b.level] ?? 3);
 
-    const mark = document.createElement("span");
-    mark.className = "opsMark";
-    mark.textContent = OPS_MARK[c.level] || "○";
-    row.appendChild(mark);
+// "왜?" 버튼 하나에 진단 요청을 붙인다 (타일·행 공용)
+function attachDiagnose(btn, ai, c) {
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.textContent = "확인 중…";
+    ai.hidden = false;
+    ai.textContent = "진단 중입니다…";
+    const r = await fetch("/ops/diagnose", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: c.id }),
+    }).catch(() => null);
+    const j = r && r.ok ? await r.json() : null;
+    const text = j?.text || "진단을 받지 못했습니다.";
+    ai.textContent = text;
+    if (j?.text) opsAnswers.set(c.id, text); // 갱신돼도 남도록 보관
+    btn.textContent = "다시 묻기";
+    btn.disabled = false;
+  });
+}
 
-    const mid = document.createElement("div");
-    mid.className = "opsMid";
-    const t = document.createElement("div");
-    t.className = "opsTitle";
-    t.textContent = c.title;
-    mid.appendChild(t);
-    const d = document.createElement("div");
-    d.className = "opsDetail";
-    d.textContent = c.detail;
-    mid.appendChild(d);
-    if (c.hint) {
-      const h = document.createElement("div");
-      h.className = "opsHint";
-      h.textContent = c.hint;
-      mid.appendChild(h);
-    }
+// 인프라 점검 하나 = 전폭 행 (힌트·진단까지 들어갈 자리가 있다)
+function opsRow(c) {
+  const row = document.createElement("div");
+  row.className = "opsItem " + c.level;
+
+  const mark = document.createElement("span");
+  mark.className = "opsMark";
+  mark.textContent = OPS_MARK[c.level] || "○";
+  row.appendChild(mark);
+
+  const mid = document.createElement("div");
+  mid.className = "opsMid";
+  const t = document.createElement("div");
+  t.className = "opsTitle";
+  t.textContent = c.title;
+  mid.appendChild(t);
+  const d = document.createElement("div");
+  d.className = "opsDetail";
+  d.textContent = c.detail;
+  mid.appendChild(d);
+  if (c.hint) {
+    const h = document.createElement("div");
+    h.className = "opsHint";
+    h.textContent = c.hint;
+    mid.appendChild(h);
+  }
+  const ai = document.createElement("div");
+  ai.className = "opsAi";
+  const kept = opsAnswers.get(c.id);
+  ai.hidden = !kept;
+  if (kept) ai.textContent = kept;
+  mid.appendChild(ai);
+  row.appendChild(mid);
+
+  // 정상인 항목까지 AI를 부를 이유가 없다 — 문제 있는 것만 버튼을 준다
+  if (c.level !== "ok") {
+    const ask = document.createElement("button");
+    ask.type = "button";
+    ask.className = "opsAsk";
+    ask.textContent = "왜?";
+    ask.title = "AI에게 원인과 대처를 물어봅니다 (구독 사용)";
+    attachDiagnose(ask, ai, c);
+    row.appendChild(ask);
+  }
+  return row;
+}
+
+// 부서 하나 = 촘촘한 타일. 대기 중이면 작게, 문제면 색으로 튄다
+function opsTile(c) {
+  const tile = document.createElement("div");
+  tile.className = "opsTile " + c.level;
+
+  const head = document.createElement("div");
+  head.className = "opsTileHead";
+  const dot = document.createElement("span");
+  dot.className = "opsTileDot";
+  dot.textContent = OPS_MARK[c.level] || "○";
+  head.appendChild(dot);
+  const name = document.createElement("span");
+  name.className = "opsTileName";
+  name.textContent = c.title;
+  head.appendChild(name);
+  tile.appendChild(head);
+
+  const st = document.createElement("div");
+  st.className = "opsTileState";
+  st.textContent = c.detail;
+  tile.appendChild(st);
+
+  // 문제 있는 부서만 진단 버튼과 답변 자리를 준다
+  if (c.level !== "ok") {
     const ai = document.createElement("div");
     ai.className = "opsAi";
     const kept = opsAnswers.get(c.id);
     ai.hidden = !kept;
     if (kept) ai.textContent = kept;
-    mid.appendChild(ai);
-    row.appendChild(mid);
 
-    // 정상인 항목까지 AI를 부를 이유가 없다 — 문제 있는 것만 버튼을 준다
-    if (c.level !== "ok") {
-      const ask = document.createElement("button");
-      ask.type = "button";
-      ask.className = "opsAsk";
-      ask.textContent = "왜?";
-      ask.title = "AI에게 원인과 대처를 물어봅니다 (구독 사용)";
-      ask.addEventListener("click", async () => {
-        ask.disabled = true;
-        ask.textContent = "확인 중…";
-        ai.hidden = false;
-        ai.textContent = "진단 중입니다…";
-        const r = await fetch("/ops/diagnose", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: c.id }),
-        }).catch(() => null);
-        const j = r && r.ok ? await r.json() : null;
-        const text = j?.text || "진단을 받지 못했습니다.";
-        ai.textContent = text;
-        if (j?.text) opsAnswers.set(c.id, text); // 갱신돼도 남도록 보관
-        ask.textContent = "다시 묻기";
-        ask.disabled = false;
-      });
-      row.appendChild(ask);
-    }
-    opsList.appendChild(row);
+    const ask = document.createElement("button");
+    ask.type = "button";
+    ask.className = "opsAsk";
+    ask.textContent = "왜?";
+    ask.title = "AI에게 원인과 대처를 물어봅니다 (구독 사용)";
+    attachDiagnose(ask, ai, c);
+    head.appendChild(ask);
+    tile.appendChild(ai);
+  }
+  return tile;
+}
+
+function renderOps(checks, at) {
+  opsAtEl.textContent = at ? `점검 ${new Date(at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "";
+  opsList.innerHTML = "";
+
+  const depts = checks.filter((c) => c.id.startsWith("dept:")).sort(byLevel);
+  const sys = checks.filter((c) => !c.id.startsWith("dept:")).sort(byLevel);
+
+  // ── 상태 요약 스트립: 한눈에 "지금 괜찮은가" ──
+  const counts = { ok: 0, warn: 0, bad: 0 };
+  for (const c of checks) counts[c.level] = (counts[c.level] || 0) + 1;
+
+  const summary = document.createElement("div");
+  summary.className = "opsSummary " + (counts.bad ? "bad" : counts.warn ? "warn" : "ok");
+  const verdict = document.createElement("div");
+  verdict.className = "opsVerdict";
+  verdict.innerHTML =
+    `<span class="opsVerdictMark">${counts.bad ? OPS_MARK.bad : counts.warn ? OPS_MARK.warn : OPS_MARK.ok}</span>` +
+    (counts.bad ? "이상 감지" : counts.warn ? "주의 필요" : "모두 정상");
+  summary.appendChild(verdict);
+
+  const pills = document.createElement("div");
+  pills.className = "opsPills";
+  for (const [lvl, label] of [["bad", "이상"], ["warn", "주의"], ["ok", "정상"]]) {
+    const p = document.createElement("div");
+    p.className = "opsPill " + lvl + (counts[lvl] ? "" : " zero");
+    p.innerHTML = `<b>${counts[lvl]}</b>${label}`;
+    pills.appendChild(p);
+  }
+  summary.appendChild(pills);
+  opsList.appendChild(summary);
+
+  // ── 부서 현황: 타일 그리드 ──
+  if (depts.length) {
+    const sec = document.createElement("div");
+    sec.className = "opsSection";
+    const h = document.createElement("div");
+    h.className = "opsSecHead";
+    h.textContent = `부서 현황 · ${depts.length}`;
+    sec.appendChild(h);
+    const grid = document.createElement("div");
+    grid.className = "opsGrid";
+    for (const c of depts) grid.appendChild(opsTile(c));
+    sec.appendChild(grid);
+    opsList.appendChild(sec);
+  }
+
+  // ── 시스템 점검: 전폭 행 ──
+  if (sys.length) {
+    const sec = document.createElement("div");
+    sec.className = "opsSection";
+    const h = document.createElement("div");
+    h.className = "opsSecHead";
+    h.textContent = "시스템 점검";
+    sec.appendChild(h);
+    const rows = document.createElement("div");
+    rows.className = "opsRows";
+    for (const c of sys) rows.appendChild(opsRow(c));
+    sec.appendChild(rows);
+    opsList.appendChild(sec);
   }
 }
 
@@ -919,6 +1079,21 @@ function closeOps() {
 opsTab.addEventListener("click", () => (opsOpen ? closeOps() : openOps()));
 document.getElementById("opsRefresh").addEventListener("click", () => loadOps());
 
+// 서버가 내려준 부서 하나를 DEPTS에 심는다 (hello 최초 구축 + 새 방 개설 공용).
+function addDept(d) {
+  DEPTS[d.id] = {
+    id: d.id, name: d.name, theme: d.theme || {}, roster: d.roster,
+    meta: buildMeta(d.roster), busy: d.busy,
+    sessions: d.sessions || [],
+    activeSession: d.sessions?.[d.sessions.length - 1]?.id || null,
+    logs: {}, unread: {},
+    prBoard: Boolean(d.prBoard), prStats: d.prStats || {},
+    gitLog: d.gitLog || [], gitRepo: d.gitRepo || "",
+    project: Boolean(d.project),
+  };
+  return DEPTS[d.id];
+}
+
 function refreshTabs() {
   opsTab.hidden = state.level < 3;
   opsTab.classList.toggle("on", opsOpen);
@@ -941,6 +1116,19 @@ function refreshTabs() {
     }
     b.addEventListener("click", () => switchDept(d.id));
     tabsEl.appendChild(b);
+  }
+  // 새 프로젝트 방 개설 — 사장만
+  if (state.level >= 3) {
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "tab tabAdd";
+    const ic = document.createElement("span");
+    ic.className = "material-symbols-outlined";
+    ic.textContent = "add";
+    add.appendChild(ic);
+    add.appendChild(document.createTextNode("새 프로젝트 방"));
+    add.addEventListener("click", openRoomModal);
+    tabsEl.appendChild(add);
   }
 }
 
@@ -1384,17 +1572,7 @@ function handleEvent(ev) {
       renderLobby(ev.presence || []);
       if (state.built) break;
       state.built = true;
-      for (const d of ev.departments) {
-        DEPTS[d.id] = {
-          id: d.id, name: d.name, theme: d.theme || {}, roster: d.roster,
-          meta: buildMeta(d.roster), busy: d.busy,
-          sessions: d.sessions || [],
-          activeSession: d.sessions?.[d.sessions.length - 1]?.id || null,
-          logs: {}, unread: {},
-          prBoard: Boolean(d.prBoard), prStats: d.prStats || {},
-          gitLog: d.gitLog || [], gitRepo: d.gitRepo || "",
-        };
-      }
+      for (const d of ev.departments) addDept(d);
       // 아직 안 끝난 결재는 기록 복원 때 글자 한 줄로 흘리지 않고 카드로 되살린다
       state.pendingIds = new Set((ev.pendingConfirms || []).map((c) => c.id));
       switchDept(ev.departments[0].id);
@@ -1442,6 +1620,30 @@ function handleEvent(ev) {
       if (!d.sessions.some((s) => s.id === ev.session.id)) d.sessions.push(ev.session);
       if (!d.activeSession) selectSession(ev.dept, ev.session.id); // 마지막 세션 삭제 후 자동 생성분
       if (ev.dept === active) renderSessionBar();
+      break;
+    }
+
+    case "dept_created": {
+      const d = ev.department;
+      if (!d || DEPTS[d.id]) break;
+      addDept(d);
+      refreshTabs();
+      if (state.wantSwitchNext) { state.wantSwitchNext = false; switchDept(d.id); }
+      break;
+    }
+
+    case "dept_deleted": {
+      const d = DEPTS[ev.dept];
+      if (!d) break;
+      for (const sid in (d.logs || {})) d.logs[sid]?.el?.remove();
+      const wasActive = active === ev.dept;
+      delete DEPTS[ev.dept];
+      if (wasActive) {
+        active = null;
+        const next = Object.keys(DEPTS)[0];
+        if (next) switchDept(next);
+      }
+      refreshTabs();
       break;
     }
 

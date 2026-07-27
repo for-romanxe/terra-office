@@ -321,6 +321,14 @@ body {
   border-radius: 999px;
 }
 #tabs .tab:focus-visible { outline: 2px solid var(--secondary); }
+/* 새 프로젝트 방 개설 — 점선 테두리로 "추가 자리"임을 드러낸다 */
+#tabs .tab.tabAdd {
+  margin-top: 4px;
+  color: var(--on-surface-var);
+  opacity: 0.75;
+  border: 1px dashed var(--outline-var);
+}
+#tabs .tab.tabAdd:hover { opacity: 1; background: var(--surface-highest); }
 
 /* PR 집계 */
 #prBoard { margin-top: 24px; padding: 0 4px; }
@@ -548,6 +556,29 @@ header {
 }
 header h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
 .hDivider { width: 1px; height: 16px; background: var(--outline-var); }
+.hSpacer { flex: 1; }
+#deptDeleteBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: 1px solid var(--outline-var);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--on-surface-var);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+#deptDeleteBtn .material-symbols-outlined { font-size: 18px; }
+#deptDeleteBtn:hover {
+  background: var(--error);
+  border-color: var(--error);
+  color: #fff;
+}
+#deptDeleteBtn:focus-visible { outline: 2px solid var(--error); }
 .stateChip {
   display: inline-flex;
   align-items: center;
@@ -1433,7 +1464,81 @@ header h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
 }
 #opsRefresh:hover { background: var(--surface-highest); }
 
-#opsList { display: flex; flex-direction: column; gap: 8px; }
+#opsList { display: flex; flex-direction: column; gap: 20px; }
+
+/* ── 상태 요약 스트립 — 한눈에 "지금 괜찮은가" ── */
+.opsSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  border: 1px solid var(--outline-var);
+  border-left: 4px solid var(--outline);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+.opsSummary.warn { border-left-color: #b8860b; }
+.opsSummary.bad  { border-left-color: var(--error); }
+.opsVerdict { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 700; }
+.opsVerdict .opsVerdictMark { font-size: 13px; color: var(--outline); }
+.opsSummary.warn .opsVerdict .opsVerdictMark { color: #b8860b; }
+.opsSummary.bad .opsVerdict .opsVerdictMark { color: var(--error); }
+.opsPills { display: flex; gap: 8px; }
+.opsPill {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--outline-var);
+  background: var(--surface-lowest);
+  font-size: 12px;
+  color: var(--on-surface-var);
+}
+.opsPill b { font-size: 14px; font-weight: 700; color: var(--on-surface); }
+.opsPill.zero { opacity: 0.4; }
+.opsPill.warn:not(.zero) { border-color: #b8860b; color: #b8860b; }
+.opsPill.warn:not(.zero) b { color: #b8860b; }
+.opsPill.bad:not(.zero) { border-color: var(--error); color: var(--error); }
+.opsPill.bad:not(.zero) b { color: var(--error); }
+
+/* ── 구역 (부서 현황 / 시스템 점검) ── */
+.opsSection { display: flex; flex-direction: column; gap: 10px; }
+.opsSecHead {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--outline);
+}
+.opsRows { display: flex; flex-direction: column; gap: 8px; }
+
+/* ── 부서 타일 그리드 ── */
+.opsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+}
+.opsTile {
+  padding: 12px 14px;
+  border: 1px solid var(--outline-var);
+  border-left: 3px solid var(--outline-var);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+.opsTile.warn { border-left-color: #b8860b; }
+.opsTile.bad  { border-left-color: var(--error); background: color-mix(in srgb, var(--error) 6%, var(--surface)); }
+.opsTileHead { display: flex; align-items: center; gap: 8px; }
+.opsTileDot { font-size: 11px; color: var(--outline); }
+.opsTile.warn .opsTileDot { color: #b8860b; }
+.opsTile.bad .opsTileDot { color: var(--error); }
+.opsTileName { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opsTileState { margin-top: 4px; font-size: 12px; color: var(--on-surface-var); }
+.opsTile .opsAsk { margin-top: 0; }
+.opsTile .opsAi { margin-top: 10px; }
+
 .opsItem {
   display: flex;
   align-items: flex-start;
