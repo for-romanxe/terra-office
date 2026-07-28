@@ -449,6 +449,10 @@ const GATED_TOOLS = {
   },
 };
 
+// 결재 대상이지만 "점검 통과(치명 0건)"면 결재를 생략하고 바로 진행하는 도구.
+// 문제가 있을 때만 보류하고 결재 카드로 알린다. (파일 쓰기·삭제 등은 항상 결재.)
+const AUTO_MERGE_TOOLS = new Set(["git_merge", "git_push"]);
+
 const USER_MEMORY_DIR = path.join(HOME, ".claude", "projects", "-Users-for-romanxe", "memory");
 const ARCHIVE_DB = path.join(HOME, "activity-archiver", "data", "archive.db");
 // 아카이버 앱 src/db/schema.ts의 CATEGORIES와 같은 목록 — 앱에서 바뀌면 여기도 바꿔야 한다
@@ -881,6 +885,16 @@ const SESS_DIR = path.join(__dirname, "sessions");
 function saveSession(dept, s) {
   fs.writeFileSync(path.join(SESS_DIR, dept.id, s.id + ".json"), JSON.stringify(s));
 }
+// 이벤트가 쌓일 때마다 디스크에 반영한다 — work()가 끝날 때만 저장하면, 진행 중이던 턴이
+// 서버 재시작에 통째로 날아가 채팅이 "부분부분" 사라진다. 폭주(도구 연발)를 막으려 짧게 디바운스한다.
+const saveTimers = new Map(); // session.id → timer
+function scheduleSave(dept, session) {
+  if (saveTimers.has(session.id)) return;
+  saveTimers.set(session.id, setTimeout(() => {
+    saveTimers.delete(session.id);
+    try { saveSession(dept, session); } catch (err) { console.error("세션 저장 실패:", err); }
+  }, 800));
+}
 function createSession(dept, title) {
   const s = {
     id: crypto.randomBytes(6).toString("base64url"),
@@ -976,8 +990,9 @@ duty: 코드·팀원 브랜치·깃허브 PR의 버그·보안·예외처리 문
 너는 ${base}실의 코드 점검관이다. 역할은 코드를 "고치는 것"이 아니라 "문제를 찾아내는 것"이다. 너에게는 읽기 도구만 있다. 발견만 하고 실장에게 보고하라. 한국어로 답한다.
 - 경로 규칙: path·repo 인자는 절대 경로. 폴더명만 받으면 /Users/for_romanxe/ 아래로 해석한다.
 - 크래시·무한루프·널 참조·API 키 하드코딩·예외 없는 외부 호출 같은 "실제로 터지는" 문제를 최우선으로 잡아라.
-- 발견 항목은 치명/경고/사소로 나눠 보고하고, 치명이 없으면 "커밋해도 됨"(또는 브랜치 점검이면 "머지해도 됨")을 명시한다.
+- 발견 항목은 치명/경고/사소로 나눠 보고하고, 치명이 없으면 "커밋해도 됨"(또는 브랜치 점검이면 "머지해도 됨")을 명시한다. 치명 항목은 반드시 \`[치명]\` 태그를 붙여 적는다.
 - 팀원이 push한 브랜치를 점검할 때: git_fetch로 최신 상태를 받고, git_diff에 target: origin/브랜치명을 줘서 main과의 차이를 본다. 파일별 상세는 file 인자로 하나씩 확인한다.
+- 브랜치·PR 점검이면 보고 맨 마지막 줄에 반드시 머지 판정을 남겨라 — 치명이 하나도 없으면 \`[머지판정] 통과\`, 치명이 하나라도 있으면 \`[머지판정] 반려\`. 이 한 줄로 시스템이 결재 없이 자동 병합할지(통과)·사장님 결재를 받을지(반려)를 정한다. 확실하지 않으면 반려로 둔다.
 `);
 
   fs.writeFileSync(path.join(dir, "employees", "통합담당.md"), `---
@@ -1148,7 +1163,10 @@ const STORED_EVENTS = new Set(["user", "delegate", "tool", "report", "assistant"
 function record(dept, session, event) {
   const ev = { ...event, dept: dept.id, session: session.id };
   broadcast(ev);
-  if (STORED_EVENTS.has(ev.type)) session.events.push(ev);
+  if (STORED_EVENTS.has(ev.type)) {
+    session.events.push(ev);
+    scheduleSave(dept, session); // 턴 도중에도 디스크에 남긴다 (재시작 대비)
+  }
 }
 
 // ── 공용 에이전트 실행 (Agent SDK — 헤드리스 Claude Code, 구독으로 과금) ──
@@ -1174,6 +1192,10 @@ async function runAgentQuery(dept, session, agentId, agent, prompt, mcpTools, ex
         mcpServers: { office: createSdkMcpServer({ name: "office", version: "1.0.0", tools: mcpTools }) },
         allowedTools: [...mcpTools.map((t) => `mcp__office__${t.name}`), ...extraAllowed],
         disallowedTools: BLOCKED_BUILTINS.filter((t) => !extraAllowed.includes(t)),
+        // 직원은 오직 사무실 도구만 봐야 한다. 이 둘이 없으면 사장님 전역 설정(~/.claude.json의
+        // higgsfield 등)이 통째로 로드돼 sandbox_exec 같은 외부 도구가 직원에게 새어 든다.
+        settingSources: [],      // 파일 기반 설정(user/project/local) 미로드 = SDK 격리 모드
+        strictMcpConfig: true,   // options.mcpServers만 사용, 파일의 다른 MCP 무시
         maxTurns: 40,
         cwd: HOME,
         env: AGENT_ENV,
@@ -1209,20 +1231,37 @@ function localSdkTool(dept, session, agentId, def) {
   return sdkTool(def.name, def.description, zodShapeFrom(def.input_schema), async (input) => {
     record(dept, session, { type: "tool", agent: agentId, name: def.name, input });
     try {
-      if (GATED_TOOLS[def.name]) {
-        const approved = await requestConfirmation(dept, session, agentId, GATED_TOOLS[def.name](input));
-        if (!approved) {
-          return {
-            content: [{ type: "text", text: "사장님이 결재를 반려했습니다. 이 작업은 실행하지 않았습니다. 필요하면 대안을 제시하세요." }],
-          };
+      const gated = Boolean(GATED_TOOLS[def.name]);
+      let mode = "none"; // none(결재대상 아님) | approved(결재 승인) | auto(점검 통과 자동)
+      if (gated) {
+        // 머지·푸시는 점검관 보고에 치명 0건이면 결재 없이 바로 진행한다.
+        const auto = AUTO_MERGE_TOOLS.has(def.name) ? autoMergeCheck(session) : null;
+        if (auto?.ok) {
+          mode = "auto";
+        } else {
+          const approved = await requestConfirmation(dept, session, agentId, GATED_TOOLS[def.name](input));
+          if (!approved) {
+            return {
+              content: [{ type: "text", text: "사장님이 결재를 반려했습니다. 이 작업은 실행하지 않았습니다. 필요하면 대안을 제시하세요." }],
+            };
+          }
+          mode = "approved";
         }
       }
       const result = runLocalTool(def.name, input);
       if (def.name === "save_note" || def.name === "delete_note") notesChanged();
-      // PM 봇 알림창: 결재까지 통과해서 실제로 실행된 병합·푸시만 남긴다
-      if (def.name === "git_merge") logGit(dept, "merge", `MERGE: ${input.branch} → ${currentBranch(input.repo) || "현재 브랜치"}`);
-      if (def.name === "git_push") logGit(dept, "push", `PUSH: ${currentBranch(input.repo) || "현재 브랜치"} → 원격`);
-      return { content: [{ type: "text", text: String(result) }] };
+      // PM 봇 알림창: 실제로 실행된 병합·푸시를, 어떻게 통과했는지(자동/결재)까지 남긴다
+      const via = mode === "auto" ? " · 자동(점검 치명 0건)" : mode === "approved" ? " · 결재 승인" : "";
+      if (def.name === "git_merge") logGit(dept, "merge", `MERGE: ${input.branch} → ${currentBranch(input.repo) || "현재 브랜치"}${via}`);
+      if (def.name === "git_push") logGit(dept, "push", `PUSH: ${currentBranch(input.repo) || "현재 브랜치"} → 원격${via}`);
+      // 실행 결과 앞에 통과 방식을 명시한다 — 없으면 에이전트가 "결재 없이 몰래 실행됐다"고 오해한다.
+      let mark = "";
+      if (mode === "approved") {
+        mark = "[시스템 확인 — 사장님 결재 승인됨] 사장님이 결재 카드에서 이 작업을 직접 승인했고, 그래서 아래 결과가 실행됐습니다. 사장님께 '승인받아 처리했다'고 보고하세요.\n\n실행 결과:\n";
+      } else if (mode === "auto") {
+        mark = "[시스템 확인 — 점검 통과, 결재 생략 자동 진행] 점검관 보고에 치명 0건이라 규칙상 사장님 결재 없이 바로 실행됐습니다(정상). 사장님께 '점검 통과라 결재 없이 자동 머지했다'고 보고하세요.\n\n실행 결과:\n";
+      }
+      return { content: [{ type: "text", text: mark + String(result) }] };
     } catch (err) {
       return { content: [{ type: "text", text: "오류: " + (err?.message || String(err)) }], isError: true };
     }
@@ -1301,12 +1340,11 @@ function pusherOf(description) {
 }
 
 // 점검관 보고에서 치명·경고 건수를 센다. 형식이 안 맞으면 세지 않는다 (틀린 숫자보다 없는 게 낫다).
-function tallyFindings(text) {
-  if (!text) return "";
-  const lines = String(text).split("\n");
+function countFindings(text) {
   const count = { 치명: 0, 경고: 0 };
+  if (!text) return count;
   let section = null;
-  for (const raw of lines) {
+  for (const raw of String(text).split("\n")) {
     const line = raw.trim();
     // 항목("1. …" / "**1. …**")을 먼저 본다 — 굵은 글씨 항목을 제목으로 오인하지 않도록
     if (/^\*{0,2}\d+\.\s/.test(line)) {
@@ -1320,10 +1358,29 @@ function tallyFindings(text) {
       if (section && /없(음|습니다)/.test(line)) section = null; // "치명 — 없음"
     }
   }
+  return count;
+}
+function tallyFindings(text) {
+  const count = countFindings(text);
   const parts = [];
   if (count.치명) parts.push(`치명 ${count.치명}건`);
   if (count.경고) parts.push(`경고 ${count.경고}건`);
   return parts.join(" · ");
+}
+// 문제 없을 때 결재 없이 바로 머지하기 위한 판정 — fail-safe다.
+// 자유서술 보고에서 지적 건수를 세는 건 형식에 따라 놓친다(실제 점검관은 "[치명] …"로 쓰는데
+// 옛 카운터는 "1. …" 번호만 셌다). 그래서 "세어서 0이면 통과"가 아니라,
+// 점검관이 명시적으로 남긴 통과 표식이 있을 때만 통과시키고, 애매하면 전부 결재로 돌린다.
+//   - [치명] 태그가 하나라도 있으면 → 결재
+//   - "[머지판정] 통과"가 없으면 → 결재 (점검 안 됐거나 판정 불명)
+//   - 둘 다 만족할 때만 → 자동 진행
+function autoMergeCheck(session) {
+  const review = latestReview(session);
+  if (!review) return { ok: false, reason: "점검 보고 없음" };
+  const t = String(review.text || "");
+  if (/\[\s*치명\s*\]/.test(t)) return { ok: false, reason: "치명 지적 있음" };
+  if (!/\[\s*머지판정\s*\]\s*통과/.test(t)) return { ok: false, reason: "명시적 통과 판정 없음" };
+  return { ok: true };
 }
 
 // 결재 카드에 붙일 점검 코멘트 — 이 세션에서 점검관이 마지막으로 낸 보고를 그대로 싣는다.
@@ -1512,6 +1569,8 @@ async function diagnose(item) {
       systemPrompt: "너는 간결하고 정확한 운영 담당이다. 추측을 사실처럼 말하지 않는다.",
       allowedTools: [],
       disallowedTools: BLOCKED_BUILTINS,
+      settingSources: [],      // 여기도 격리 — 전역 MCP 설정을 물려받지 않는다
+      strictMcpConfig: true,
       maxTurns: 1,
       cwd: HOME,
       env: AGENT_ENV,
