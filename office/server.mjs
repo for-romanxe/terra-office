@@ -1379,26 +1379,36 @@ function tallyFindings(text) {
 //   - [치명] 태그가 하나라도 있으면 → 결재
 //   - "[머지판정] 통과"가 없으면 → 결재 (점검 안 됐거나 판정 불명)
 //   - 둘 다 만족할 때만 → 자동 진행
+// 점검관이 여럿인 방(개발실)을 위해 마지막 결재 이후 보고를 전부 본다. 판정 마커는 브랜치를
+// 점검하는 코드 점검관만 내지만, 문서·스펙·제출 점검관도 [치명] 태그로 병합을 막을 수 있다.
+// 그래서 "마커가 있는 마지막 보고"로 판정하되, 마커 없는 보고라도 치명이 있으면 결재로 돌린다.
 function autoMergeCheck(session) {
-  const review = latestReview(session);
-  if (!review) return { ok: false, reason: "점검 보고 없음" };
-  const t = String(review.text || "");
-  if (/\[\s*치명\s*\]/.test(t)) return { ok: false, reason: "치명 지적 있음" };
-  if (!/\[\s*머지판정\s*\]\s*통과/.test(t)) return { ok: false, reason: "명시적 통과 판정 없음" };
+  const reviews = reviewsSinceConfirm(session);
+  if (!reviews.length) return { ok: false, reason: "점검 보고 없음" };
+  if (reviews.some((r) => /\[\s*치명\s*\]/.test(r.text))) return { ok: false, reason: "치명 지적 있음" };
+  const judged = reviews.filter((r) => /\[\s*머지판정\s*\]\s*(통과|반려)/.test(r.text)).pop();
+  if (!judged) return { ok: false, reason: "명시적 통과 판정 없음" };
+  if (!/\[\s*머지판정\s*\]\s*통과/.test(judged.text)) return { ok: false, reason: "점검관이 반려로 판정" };
   return { ok: true };
+}
+
+// 마지막 결재 이후의 점검관 보고 전부 (오래된 것 → 최신 순)
+function reviewsSinceConfirm(session) {
+  const out = [];
+  for (let i = session.events.length - 1; i >= 0; i--) {
+    const e = session.events[i];
+    if (e.type === "confirm_result") break;
+    if (e.type === "report" && /inspector/.test(e.from || "")) {
+      out.unshift({ by: e.from, text: String(e.text || "") });
+    }
+  }
+  return out;
 }
 
 // 결재 카드에 붙일 점검 코멘트 — 이 세션에서 점검관이 마지막으로 낸 보고를 그대로 싣는다.
 // 요약하지 않는 이유: 사장님이 "무슨 문제인지" 직접 읽고 승인·반려를 정해야 하기 때문.
 function latestReview(session) {
-  for (let i = session.events.length - 1; i >= 0; i--) {
-    const e = session.events[i];
-    if (e.type === "confirm_result") break; // 지난 결재보다 뒤엣것만 본다
-    if (e.type === "report" && /inspector/.test(e.from || "")) {
-      return { by: e.from, text: String(e.text || "") };
-    }
-  }
-  return null;
+  return reviewsSinceConfirm(session).pop() || null;
 }
 
 function requestConfirmation(dept, session, agentId, description) {
