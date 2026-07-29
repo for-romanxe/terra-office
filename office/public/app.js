@@ -133,6 +133,14 @@ function switchDept(id) {
   CHARS = dept.meta;
 
   deptTitleEl.textContent = dept.name;
+  // 쉘이 켜진 방은 제목 옆에 표시한다 — 켜둔 걸 잊으면 위험한 권한이라 눈에 보여야 한다
+  if (dept.shell) {
+    const badge = document.createElement("span");
+    badge.className = "shellBadge";
+    badge.textContent = "쉘 허용";
+    badge.title = "이 방 직원은 터미널 명령을 실행할 수 있습니다 (node office/shell.mjs off 로 회수)";
+    deptTitleEl.appendChild(badge);
+  }
   mHeadTextEl.textContent = `사내 메신저 — ${dept.name} 직통`;
   stage = Scene.build(sceneEl, { lab: dept.theme?.preset === "lab" });
 
@@ -1090,6 +1098,7 @@ function addDept(d) {
     prBoard: Boolean(d.prBoard), prStats: d.prStats || {},
     gitLog: d.gitLog || [], gitRepo: d.gitRepo || "",
     project: Boolean(d.project),
+    shell: Boolean(d.shell),
   };
   return DEPTS[d.id];
 }

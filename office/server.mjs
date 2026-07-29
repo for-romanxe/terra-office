@@ -40,6 +40,7 @@ const BLOCKED_BUILTINS = [
   "Bash", "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Glob", "Grep",
   "WebSearch", "WebFetch", "Task", "TodoWrite", "KillShell", "BashOutput", "Skill", "SlashCommand",
   "PushNotification", // 헤드리스라 받아줄 앱이 없어 항상 발송 실패 — 알림은 사무실 웹이 담당
+  "Monitor", // Bash를 막아도 이걸로 명령이 돌아간다 (실제로 뚫린 적 있다)
 ];
 
 const clip = (s, n = 4000) => (String(s).length > n ? String(s).slice(0, n) + "\n…(이하 생략)" : String(s));
@@ -1028,6 +1029,7 @@ function departmentDTO(d) {
     theme: d.theme,
     prBoard: d.prBoard,
     project: d.project,
+    shell: shellDepts().has(d.id), // 쉘 켜진 방은 화면에 표시한다 — 모르고 켜둔 채 두면 위험하다
     prStats: readPrStats()[d.id] || {},
     gitLog: readGitLog()[d.id] || [],
     gitRepo: readJson(WATCH_FILE, []).find((w) => w?.dept === d.id)?.repo || "",
@@ -1189,14 +1191,24 @@ async function runAgentQuery(dept, session, agentId, agent, prompt, mcpTools, ex
   }, 30000);
   try {
     const sdkIds = (session.sdkSessions ||= {}); // 구버전 세션 파일 호환
+    // 허용 목록을 canUseTool로 한 번 더 강제한다. 차단 목록만으로는 새로 생긴 내장 도구를
+    // 놓친다 — 실제로 Monitor가 목록에 없어서 Bash를 막아둔 방에서 명령이 돌아간 적 있다.
+    const allowed = new Set([...mcpTools.map((t) => `mcp__office__${t.name}`), ...extraAllowed]);
     const q = query({
       prompt,
       options: {
         model: agent.model || MODEL,
         systemPrompt: agent.system,
         mcpServers: { office: createSdkMcpServer({ name: "office", version: "1.0.0", tools: mcpTools }) },
-        allowedTools: [...mcpTools.map((t) => `mcp__office__${t.name}`), ...extraAllowed],
+        allowedTools: [...allowed],
         disallowedTools: BLOCKED_BUILTINS.filter((t) => !extraAllowed.includes(t)),
+        canUseTool: async (toolName, input) =>
+          allowed.has(toolName)
+            ? { behavior: "allow", updatedInput: input }
+            : {
+                behavior: "deny",
+                message: `${toolName}은(는) 이 사무실에서 쓸 수 없는 도구입니다. 가진 도구로만 처리하고, 정말 필요하면 사장님께 요청하세요.`,
+              },
         // 직원은 오직 사무실 도구만 봐야 한다. 이 둘이 없으면 사장님 전역 설정(~/.claude.json의
         // higgsfield 등)이 통째로 로드돼 sandbox_exec 같은 외부 도구가 직원에게 새어 든다.
         settingSources: [],      // 파일 기반 설정(user/project/local) 미로드 = SDK 격리 모드
@@ -1213,10 +1225,15 @@ async function runAgentQuery(dept, session, agentId, agent, prompt, mcpTools, ex
       if (msg.type === "system" && msg.subtype === "init") {
         sdkIds[agentId] = msg.session_id;
       } else if (msg.type === "assistant") {
-        // 우리 도구는 핸들러 안에서 기록하므로 여기서는 내장 웹 도구만 메신저에 띄운다
+        // 우리 도구는 핸들러 안에서 기록하므로 여기서는 내장 도구만 메신저에 띄운다.
+        // Bash는 특히 빠짐없이 남긴다 — 쉘이 켜진 방에서 무엇을 돌렸는지가 유일한 감사 기록이다.
         for (const b of msg.message?.content || []) {
-          if (b.type === "tool_use" && (b.name === "WebSearch" || b.name === "WebFetch")) {
+          if (b.type !== "tool_use") continue;
+          if (b.name === "WebSearch" || b.name === "WebFetch") {
             record(dept, session, { type: "tool", agent: agentId, name: b.name, input: b.input });
+          } else if (b.name === "Bash") {
+            record(dept, session, { type: "tool", agent: agentId, name: "쉘", input: { command: b.input?.command } });
+            console.log(`쉘 실행 ${dept.id}/${agentId}: ${String(b.input?.command || "").replace(/\s+/g, " ").slice(0, 200)}`);
           }
         }
       } else if (msg.type === "result") {
@@ -1284,6 +1301,18 @@ const BASE_ACCESS_TOOLS = ["web_fetch", "web_search", "gh_pr_list", "gh_pr_view"
 // 점검관(*_inspector)은 읽기 전용을 유지한다 — 고칠 수단이 없어야 리뷰가 오염되지 않는다.
 const BASE_EDIT_TOOLS = ["write_file", "edit_file"];
 
+// ── 방별 쉘 허용 ──────────────────────────────────────────────
+// 쉘을 주면 사무실이 걸어둔 안전장치가 통째로 무력화된다: SENSITIVE_PATHS(.ssh·.env·토큰)는
+// 우리 도구에만 걸려 있어 cat 한 번이면 우회되고, 실행에 승인 절차도 없다(헤드리스라 물어볼
+// 사람이 없다). 그래서 전역 스위치가 아니라 방 단위다 — 사장님 혼자 쓰는 방만 켜고,
+// 친구들이 지시하거나 PR·훅으로 외부 텍스트가 흘러드는 방은 꺼 둔다.
+// 목록은 매번 파일에서 읽는다 → 서버 재시작 없이 켜고 끌 수 있다.
+const SHELL_FILE = path.join(__dirname, "shell.json");
+function shellDepts() {
+  const v = readJson(SHELL_FILE, []);
+  return new Set(Array.isArray(v) ? v : []);
+}
+
 function buildEmployeeTools(dept, session, agentId, emp) {
   const tools = [];
   const extraAllowed = [];
@@ -1292,6 +1321,8 @@ function buildEmployeeTools(dept, session, agentId, emp) {
   let names = [...new Set([...emp.toolNames, ...base])];
   // 점검관은 md에 write/edit가 적혀 있어도 읽기 전용을 강제한다
   if (isInspector) names = names.filter((n) => !BASE_EDIT_TOOLS.includes(n));
+  // 쉘이 켜진 방이면 내장 Bash를 준다. 점검관은 제외 — 쉘이 있으면 읽기 전용이 무의미해진다.
+  if (!isInspector && shellDepts().has(dept.id)) extraAllowed.push("Bash");
   for (const name of names) {
     const def = TOOL_REGISTRY[name];
     if (def.builtin) {
@@ -1590,6 +1621,7 @@ async function diagnose(item) {
       systemPrompt: "너는 간결하고 정확한 운영 담당이다. 추측을 사실처럼 말하지 않는다.",
       allowedTools: [],
       disallowedTools: BLOCKED_BUILTINS,
+      canUseTool: async (toolName) => ({ behavior: "deny", message: toolName + "은(는) 쓸 수 없습니다. 도구 없이 답하세요." }),
       settingSources: [],      // 여기도 격리 — 전역 MCP 설정을 물려받지 않는다
       strictMcpConfig: true,
       maxTurns: 1,
@@ -1647,6 +1679,7 @@ async function ensureMergeVerdict(dept, session, id, emp, report, fromIdx) {
         model: emp.model || MODEL,
         allowedTools: [],
         disallowedTools: BLOCKED_BUILTINS,
+        canUseTool: async (toolName) => ({ behavior: "deny", message: toolName + "은(는) 쓸 수 없습니다. 도구 없이 답하세요." }),
         settingSources: [],
         strictMcpConfig: true,
         maxTurns: 1,
