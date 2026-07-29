@@ -453,6 +453,10 @@ const GATED_TOOLS = {
 // 문제가 있을 때만 보류하고 결재 카드로 알린다. (파일 쓰기·삭제 등은 항상 결재.)
 const AUTO_MERGE_TOOLS = new Set(["git_merge", "git_push"]);
 
+// 이 도구들을 쓴 점검이면 "브랜치·PR 점검"으로 본다 — 머지 판정 한 줄이 있어야 하는 보고.
+// 파일 요약 같은 잡무 점검에까지 판정을 받아내면 없던 통과 표식이 생겨 위험하다.
+const REVIEW_TOOLS = new Set(["git_diff", "git_fetch", "gh_pr_diff", "gh_pr_view"]);
+
 const USER_MEMORY_DIR = path.join(HOME, ".claude", "projects", "-Users-for-romanxe", "memory");
 const ARCHIVE_DB = path.join(HOME, "activity-archiver", "data", "archive.db");
 // 아카이버 앱 src/db/schema.ts의 CATEGORIES와 같은 목록 — 앱에서 바뀌면 여기도 바꿔야 한다
@@ -992,7 +996,7 @@ duty: 코드·팀원 브랜치·깃허브 PR의 버그·보안·예외처리 문
 - 크래시·무한루프·널 참조·API 키 하드코딩·예외 없는 외부 호출 같은 "실제로 터지는" 문제를 최우선으로 잡아라.
 - 발견 항목은 치명/경고/사소로 나눠 보고하고, 치명이 없으면 "커밋해도 됨"(또는 브랜치 점검이면 "머지해도 됨")을 명시한다. 치명 항목은 반드시 \`[치명]\` 태그를 붙여 적는다.
 - 팀원이 push한 브랜치를 점검할 때: git_fetch로 최신 상태를 받고, git_diff에 target: origin/브랜치명을 줘서 main과의 차이를 본다. 파일별 상세는 file 인자로 하나씩 확인한다.
-- 브랜치·PR 점검이면 보고 맨 마지막 줄에 반드시 머지 판정을 남겨라 — 치명이 하나도 없으면 \`[머지판정] 통과\`, 치명이 하나라도 있으면 \`[머지판정] 반려\`. 이 한 줄로 시스템이 결재 없이 자동 병합할지(통과)·사장님 결재를 받을지(반려)를 정한다. 확실하지 않으면 반려로 둔다.
+- 브랜치·PR 점검이면 보고의 맨 마지막 줄은 반드시 \`[머지판정] 통과\`(치명 0건일 때만) 또는 \`[머지판정] 반려\`(치명이 있거나 조건부·불확실할 때) 둘 중 하나여야 한다. 한 글자도 바꾸지 마라 — "병합 가능", "최종 판정: 통과" 같은 자연어 판정은 시스템이 읽지 못한다. 서술은 본문에서 하고 마지막 줄은 이 형식 그대로 찍어라. 이 한 줄로 시스템이 결재 없이 자동 병합할지(통과)·사장님 결재를 받을지(반려)를 정한다. 줄을 빼먹으면 판정 없음으로 처리돼 매번 사장님 결재가 뜬다. 확실하지 않으면 반려다.
 `);
 
   fs.writeFileSync(path.join(dir, "employees", "통합담당.md"), `---
@@ -1590,8 +1594,67 @@ async function diagnose(item) {
 async function runEmployee(dept, session, id, request) {
   const emp = dept.employees[id];
   const { tools, extraAllowed } = buildEmployeeTools(dept, session, id, emp);
+  const from = session.events.length; // 이번 업무에서 어떤 도구를 썼는지 보려고 시작 지점을 기억
   const report = await runAgentQuery(dept, session, id, emp, request, tools, extraAllowed);
-  return report || "(보고 내용 없음)";
+  return (await ensureMergeVerdict(dept, session, id, emp, report || "", from)) || "(보고 내용 없음)";
+}
+
+// 점검관이 지침을 어기고 머지 판정 한 줄(`[머지판정] 통과/반려`)을 빼먹으면, 자동 병합이 걸리지
+// 않아 매번 결재 카드가 뜬다. 보고 본문을 자연어로 훑는 건 위험하다("조건부 병합 가능"을 통과로
+// 오독한 실제 사례가 있다) — 그래서 판정은 점검관 본인에게 다시 묻는다. 자기가 방금 쓴 보고를
+// 맥락으로 들고 있으니(같은 SDK 세션 resume) 제3자 판정보다 정확하고, 마커가 이미 있으면 호출 자체가 없다.
+// 판정 기준을 좁게 적는 게 중요하다. "확실하지 않으면 반려"만 주면 보고 끝에 흔히 붙는
+// 후속 과제·주의 서술까지 반려로 읽어서 통과가 거의 안 나온다(실보고 report[4]로 확인).
+// 반대로 "조건부 병합 가능"은 사장님 판단이 필요한 자리라 반려로 못박는다.
+const VERDICT_PROMPT =
+  `[시스템] 방금 보고에 머지 판정 한 줄이 빠졌다. 다른 말은 쓰지 말고 그 한 줄만 다시 출력하라.\n` +
+  `기준은 하나다 — 지금 이 브랜치를 main에 병합하면 안 되는 미해소 치명이 네 보고에 남아 있는가?\n` +
+  `남아 있으면 \`[머지판정] 반려\`. 없으면 \`[머지판정] 통과\`.\n` +
+  `경고·제안·후속 과제·이 브랜치 밖의 문제는 반려 사유가 아니다.\n` +
+  `단, 병합 전에 처리하라는 조건을 단 경우(조건부 병합 가능)와 판단이 불가능한 경우는 반려다.`;
+
+async function ensureMergeVerdict(dept, session, id, emp, report, fromIdx) {
+  if (!/inspector/.test(id)) return report;
+  if (/\[\s*머지판정\s*\]/.test(report)) return report;   // 지침대로 찍었으면 할 일 없음
+  if (/\[\s*치명\s*\]/.test(report)) return report;       // 어차피 결재로 빠지니 물어볼 필요 없음
+  const sdkId = session.sdkSessions?.[id];
+  if (!sdkId) return report;
+  const usedReviewTool = session.events
+    .slice(fromIdx)
+    .some((e) => e.type === "tool" && e.agent === id && REVIEW_TOOLS.has(e.name));
+  if (!usedReviewTool) return report; // 브랜치·PR 점검이 아니면 판정 자체가 없어야 정상
+
+  try {
+    const q = query({
+      prompt: VERDICT_PROMPT,
+      options: {
+        model: emp.model || MODEL,
+        allowedTools: [],
+        disallowedTools: BLOCKED_BUILTINS,
+        settingSources: [],
+        strictMcpConfig: true,
+        maxTurns: 1,
+        cwd: HOME,
+        env: AGENT_ENV,
+        resume: sdkId,
+      },
+    });
+    let answer = "";
+    for await (const msg of q) {
+      if (msg.type === "system" && msg.subtype === "init") session.sdkSessions[id] = msg.session_id;
+      else if (msg.type === "assistant") {
+        for (const c of msg.message?.content || []) if (c.type === "text") answer += c.text;
+      }
+    }
+    const verdict = /\[\s*머지판정\s*\]\s*통과/.test(answer) ? "통과"
+      : /\[\s*머지판정\s*\]\s*반려/.test(answer) ? "반려" : null;
+    console.log(`판정 보정 ${dept.id}/${id}: ${verdict || "실패(" + answer.slice(0, 40).replace(/\s+/g, " ") + ")"}`);
+    if (!verdict) return report; // 못 받아내면 마커 없는 채로 둔다 = 결재
+    return `${report}\n\n[머지판정] ${verdict}`;
+  } catch (err) {
+    console.log(`판정 보정 실패 ${dept.id}/${id}: ${err?.message || err}`);
+    return report;
+  }
 }
 
 async function work(dept, session, text, name, files = null, rank = "") {
