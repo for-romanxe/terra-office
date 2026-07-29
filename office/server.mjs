@@ -961,7 +961,7 @@ project: true
 - 모든 git·파일 작업에는 대상 경로가 필요하다. 사용자가 폴더명만 말하면 /Users/for_romanxe/ 아래 경로로 해석해서 팀원에게 전달한다. 어느 저장소인지 불분명하면 먼저 물어본다.
 - 점검관은 "발견"만 하고 수정하지 않는 것이 원칙이다. 점검 결과를 보고할 때 발견 항목을 임의로 누락하지 마라.
 - 커밋 전에는 코드 점검관에게 변경사항 점검을 먼저 시키는 것이 원칙이다. 치명 항목이 있으면 커밋을 진행하지 말고 사용자에게 알려라.
-- 팀 협업은 "사무실 PR" 방식이 기본이다: 팀원은 깃허브에 push만 하면 되고, 서버가 브랜치 push를 감지해 자동 접수한다. 점검은 코드 점검관(git_fetch → git_diff로 main과 비교), 병합은 통합담당(git_fetch → main에서 origin/브랜치명 병합 → push, 점검 \`[머지판정] 통과\`면 결재 없이 자동·치명 있으면 사장님 결재). 점검 통과 후에도 병합은 별도 지시가 있을 때만 한다.
+- 팀 협업은 "사무실 PR" 방식이 기본이다: 팀원은 깃허브에 push만 하면 되고, 서버가 브랜치 push를 감지해 자동 접수한다. 점검은 코드 점검관(git_fetch → git_diff로 main과 비교), 병합은 통합담당(git_fetch → main에서 origin/브랜치명 병합 → push, 점검 \`[머지판정] 통과\`면 결재 없이 자동·치명 있으면 결재(사장·이사·본부장 승인)). 점검 통과 후에도 병합은 별도 지시가 있을 때만 한다.
 - 깃허브에 올라온 PR 점검도 가능하다: 코드 점검관에게 gh_pr_view로 충돌 여부(mergeable)를, gh_pr_diff로 변경사항을 점검시켜라. PR을 GitHub에서 직접 만들거나 머지 버튼을 누르는 것은 불가능하다.
 `);
 
@@ -1006,7 +1006,7 @@ name: 통합 담당
 model: claude-haiku-4-5
 color: "#6a5a8a"
 tools: git_commit, git_branch, git_fetch, git_merge, git_push, list_files, read_file
-duty: 저장소의 커밋·브랜치·병합·푸시를 수행한다 (팀원 브랜치는 git_fetch 후 origin/브랜치명으로 병합, 병합·푸시는 점검 통과면 자동, 치명 있으면 사장님 결재)
+duty: 저장소의 커밋·브랜치·병합·푸시를 수행한다 (팀원 브랜치는 git_fetch 후 origin/브랜치명으로 병합, 병합·푸시는 점검 통과면 자동, 치명 있으면 결재(사장·이사·본부장 승인))
 ---
 
 너는 ${base}실의 통합 담당이다. git 커밋, 브랜치 관리, 병합, 푸시를 수행하고 결과를 간결하게 보고한다. 한국어로 답한다.
@@ -1015,7 +1015,7 @@ duty: 저장소의 커밋·브랜치·병합·푸시를 수행한다 (팀원 브
 - 여럿이 같은 저장소를 만질 수 있다. 병합 전에 충돌 여부를 먼저 확인하고, 충돌이 있으면 임의로 풀지 말고 실장에게 보고하라.
 - 팀원이 push한 브랜치를 병합할 때는 git_fetch로 최신 상태를 받은 뒤, git_branch로 main에 반드시 먼저 이동하고 origin/브랜치명을 병합한다.
 - git_merge는 "현재 브랜치"로 합친다. 저장소가 어느 브랜치에 서 있는지 모르면 git_status로 확인부터 하라. main이 아닌 곳에 서 있는 채로 병합하면 엉뚱한 브랜치가 오염된다. 이동을 건너뛰지 마라.
-- 병합·푸시의 결재 여부는 시스템이 자동으로 정한다: 점검관의 \`[머지판정] 통과\`(치명 0)면 결재 없이 바로 실행되고, 치명이 있거나 판정이 없으면 사장님 결재 카드를 띄운다. 승인 여부를 네가 미리 판단해 보류하지 마라. "결재 생략 자동 진행"이라는 시스템 확인이 오면 정상이니 사장님께 '점검 통과라 결재 없이 자동 머지했다'고 보고하라.
+- 병합·푸시의 결재 여부는 시스템이 자동으로 정한다: 점검관의 \`[머지판정] 통과\`(치명 0)면 결재 없이 바로 실행되고, 치명이 있거나 판정이 없으면 결재 카드를 띄운다(병합·푸시 결재는 사장님뿐 아니라 이사·본부장도 승인할 수 있다). 승인 여부를 네가 미리 판단해 보류하지 마라. "결재 생략 자동 진행"이라는 시스템 확인이 오면 정상이니 사장님께 '점검 통과라 결재 없이 자동 머지했다'고 보고하라.
 `);
 }
 
@@ -1238,19 +1238,22 @@ function localSdkTool(dept, session, agentId, def) {
     try {
       const gated = Boolean(GATED_TOOLS[def.name]);
       let mode = "none"; // none(결재대상 아님) | approved(결재 승인) | auto(점검 통과 자동)
+      let approver = ""; // 실제로 결재 버튼을 누른 사람 (병합은 사장 외에도 누를 수 있다)
       if (gated) {
         // 머지·푸시는 점검관 보고에 치명 0건이면 결재 없이 바로 진행한다.
         const auto = AUTO_MERGE_TOOLS.has(def.name) ? autoMergeCheck(session) : null;
         if (auto?.ok) {
           mode = "auto";
         } else {
-          const approved = await requestConfirmation(dept, session, agentId, GATED_TOOLS[def.name](input));
-          if (!approved) {
+          const minRank = AUTO_MERGE_TOOLS.has(def.name) ? RANKS.본부장 : RANKS.사장;
+          const decision = await requestConfirmation(dept, session, agentId, GATED_TOOLS[def.name](input), minRank);
+          if (!decision.approve) {
             return {
-              content: [{ type: "text", text: "사장님이 결재를 반려했습니다. 이 작업은 실행하지 않았습니다. 필요하면 대안을 제시하세요." }],
+              content: [{ type: "text", text: `${decision.by || "사장님"}이 결재를 반려했습니다. 이 작업은 실행하지 않았습니다. 필요하면 대안을 제시하세요.` }],
             };
           }
           mode = "approved";
+          approver = decision.by || "사장님";
         }
       }
       const result = runLocalTool(def.name, input);
@@ -1262,7 +1265,7 @@ function localSdkTool(dept, session, agentId, def) {
       // 실행 결과 앞에 통과 방식을 명시한다 — 없으면 에이전트가 "결재 없이 몰래 실행됐다"고 오해한다.
       let mark = "";
       if (mode === "approved") {
-        mark = "[시스템 확인 — 사장님 결재 승인됨] 사장님이 결재 카드에서 이 작업을 직접 승인했고, 그래서 아래 결과가 실행됐습니다. 사장님께 '승인받아 처리했다'고 보고하세요.\n\n실행 결과:\n";
+        mark = `[시스템 확인 — 결재 승인됨] ${approver}께서 결재 카드에서 이 작업을 직접 승인했고, 그래서 아래 결과가 실행됐습니다. 보고할 때 승인자를 ${approver}으로 정확히 적으세요.\n\n실행 결과:\n`;
       } else if (mode === "auto") {
         mark = "[시스템 확인 — 점검 통과, 결재 생략 자동 진행] 점검관 보고에 치명 0건이라 규칙상 사장님 결재 없이 바로 실행됐습니다(정상). 사장님께 '점검 통과라 결재 없이 자동 머지했다'고 보고하세요.\n\n실행 결과:\n";
       }
@@ -1411,14 +1414,16 @@ function latestReview(session) {
   return reviewsSinceConfirm(session).pop() || null;
 }
 
-function requestConfirmation(dept, session, agentId, description) {
+// minRank: 이 결재를 승인할 수 있는 최소 직급. 병합·푸시만 이사·본부장에게 열려 있고
+// (사장이 자리를 비워도 팀이 굴러가야 해서), 노트 삭제·파일 쓰기 등 나머지는 사장 전용이다.
+function requestConfirmation(dept, session, agentId, description, minRank = RANKS.사장) {
   const id = crypto.randomBytes(6).toString("base64url");
   const review = latestReview(session);
   const event = {
-    type: "confirm_request", id, agent: agentId, description, review,
+    type: "confirm_request", id, agent: agentId, description, review, minRank,
     dept: dept.id, session: session.id, at: Date.now(),
   };
-  record(dept, session, { type: "confirm_request", id, agent: agentId, description, review });
+  record(dept, session, { type: "confirm_request", id, agent: agentId, description, review, minRank });
   return new Promise((resolve) => {
     // 결재 결과를 PM 봇 창에 남긴다. 반려됐을 때 "누가 무엇을 왜" 고쳐야 하는지가 한 줄에 다 보이도록
     // push한 사람 이름과 치명·경고 건수를 붙이고, 점검관 의견 원문은 접힌 본문으로 싣는다.
@@ -1434,16 +1439,17 @@ function requestConfirmation(dept, session, agentId, description) {
       if (pendingConfirms.delete(id)) {
         record(dept, session, { type: "confirm_result", id, approve: false, timeout: true });
         gateLog("결재 시한 경과 · 자동 반려");
-        resolve(false); // 5분간 결재가 없으면 자동 반려
+        resolve({ approve: false, by: "" }); // 5분간 결재가 없으면 자동 반려
       }
     }, 5 * 60 * 1000);
     pendingConfirms.set(id, {
       event,
-      resolve: (approve) => {
+      // by: 실제로 버튼을 누른 사람. 병합 결재는 사장 외에도 누를 수 있어 기록해 둔다.
+      resolve: (approve, by = "") => {
         clearTimeout(timer);
-        record(dept, session, { type: "confirm_result", id, approve });
-        gateLog(`결재 ${approve ? "승인" : "반려"}`);
-        resolve(approve);
+        record(dept, session, { type: "confirm_result", id, approve, ...(by ? { by } : {}) });
+        gateLog(`결재 ${approve ? "승인" : "반려"}${by ? ` · ${by}` : ""}`);
+        resolve({ approve, by });
       },
     });
   });
@@ -1684,7 +1690,9 @@ async function work(dept, session, text, name, files = null, rank = "") {
     if (rank && rank !== "사장") {
       prompt +=
         `\n\n(발신자 직급: ${rank}. 회사 서열은 사장 > 이사 > 본부장 > AI 직원 순이며, ` +
-        `${rank}님은 직원들의 상급자다. 지시는 그대로 따르되, 결재가 필요한 작업은 사장님 결재만 유효하다.)`;
+        `${rank}님은 직원들의 상급자다. 지시는 그대로 따르되, 결재가 필요한 작업 중 ` +
+        `병합·푸시는 이사·본부장도 승인할 수 있고, 그 밖의 결재(노트 삭제·파일 쓰기 등)는 사장님 승인만 유효하다. ` +
+        `병합 지시는 ${rank}님도 할 수 있으니 "사장님께 여쭤보라"며 미루지 마라.)`;
     }
     if (fileList.length) {
       const lines = fileList
@@ -1842,18 +1850,20 @@ const server = http.createServer(async (req, res) => {
       id = String(parsed.id || "");
       approve = Boolean(parsed.approve);
     } catch {}
-    // 결재는 사장님 전용 — 이사·본부장은 결재 카드를 볼 수만 있다
-    if (!isBoss(req)) {
-      res.writeHead(403, { "Content-Type": "application/json" }).end('{"error":"boss only"}');
-      return;
-    }
     const pending = pendingConfirms.get(id);
     if (!pending) {
       res.writeHead(404, { "Content-Type": "application/json" }).end('{"error":"no such confirm"}');
       return;
     }
+    // 승인 가능한 최소 직급은 결재 카드가 들고 있다 — 병합·푸시는 이사·본부장도 누를 수 있고
+    // 나머지(노트 삭제·파일 쓰기 등)는 사장 전용이다. 구버전 카드는 사장 전용으로 본다.
+    const me = whoIs(req);
+    if ((RANKS[me?.rank] || 0) < (pending.event.minRank ?? RANKS.사장)) {
+      res.writeHead(403, { "Content-Type": "application/json" }).end('{"error":"rank too low"}');
+      return;
+    }
     pendingConfirms.delete(id);
-    pending.resolve(approve);
+    pending.resolve(approve, [me?.rank, me?.name].filter(Boolean).join(" "));
     res.writeHead(200, { "Content-Type": "application/json" }).end('{"ok":true}');
     return;
   }

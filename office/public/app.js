@@ -1354,11 +1354,15 @@ function addConfirmCard(ev) {
   body.appendChild(warn);
   inner.appendChild(body);
 
-  // 결재는 사장님만. 이사·본부장에게는 진행 상황만 보여준다 (서버도 403으로 막는다)
-  if (state.level < 3) {
+  // 승인 가능한 최소 직급은 카드마다 다르다 — 병합·푸시는 이사·본부장도, 나머지는 사장만.
+  // 못 누르는 사람에게는 누구를 기다리는 중인지 보여준다 (서버도 403으로 막는다)
+  const minRank = ev.minRank || 3;
+  if (state.level < minRank) {
     const waiting = document.createElement("div");
     waiting.className = "cWaiting";
-    waiting.textContent = "사장님 결재 대기 중 — 이 작업은 사장님만 승인할 수 있습니다.";
+    waiting.textContent = minRank >= 3
+      ? "사장님 결재 대기 중 — 이 작업은 사장님만 승인할 수 있습니다."
+      : "결재 대기 중 — 출근한 사원(본부장 이상)이 승인할 수 있습니다.";
     inner.appendChild(waiting);
     log.appendChild(card);
     if (ev.dept === active && DEPTS[ev.dept].activeSession === ev.session) log.scrollTop = log.scrollHeight;
@@ -1382,7 +1386,9 @@ function addConfirmCard(ev) {
       if (res && res.status === 403) {
         btns.querySelectorAll("button").forEach((x) => (x.disabled = false));
         addChat(ev.dept, ev.session, {
-          text: "결재 권한이 없습니다 — 사장으로 다시 출근하세요.",
+          text: minRank >= 3
+            ? "결재 권한이 없습니다 — 사장으로 다시 출근하세요."
+            : "결재 권한이 없습니다 — 접속 코드로 다시 출근하세요.",
           trace: "sys", icon: "error", cls: "err",
         });
       }
@@ -1726,7 +1732,8 @@ function handleEvent(ev) {
     case "confirm_request": {
       confirmMeta.set(ev.id, { dept: ev.dept, session: ev.session, agent: ev.agent });
       addConfirmCard(ev);
-      if (state.owner) notify(ev, "결재 요청 (5분 내 승인 필요)", ev.description);
+      // 누를 수 있는 사람에게만 울린다 — 병합 결재는 이사·본부장에게도 간다
+      if (state.level >= (ev.minRank || 3)) notify(ev, "결재 요청 (5분 내 승인 필요)", ev.description);
       const M = DEPTS[ev.dept]?.meta || {};
       if (ev.dept === active) setStaff(ev.agent, "wait", ev.description);
       if (M[ev.agent]) {
